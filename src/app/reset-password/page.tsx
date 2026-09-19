@@ -3,42 +3,35 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { RiStore2Line, RiEyeLine, RiEyeOffLine, RiLoader4Line } from 'react-icons/ri'
+import {
+  RiStore2Line,
+  RiEyeLine,
+  RiEyeOffLine,
+  RiLoader4Line,
+} from 'react-icons/ri'
 
-export default function LoginPage() {
-  const [email, setEmail] = useState('')
+export default function ResetPasswordPage() {
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
+  const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
+
   const router = useRouter()
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    setMessage('')
-    setLoading(true)
+    setSuccess('')
 
-    const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-
-    if (error) {
-      setError('Email ose fjalëkalim i gabuar')
-      setLoading(false)
+    if (password.length < 6) {
+      setError('Fjalëkalimi duhet të ketë të paktën 6 karaktere')
       return
     }
 
-    router.push('/')
-    router.refresh()
-  }
-
-  const handleForgotPassword = async () => {
-    setError('')
-    setMessage('')
-
-    if (!email) {
-      setError('Shkruaj email-in tënd më sipër')
+    if (password !== confirmPassword) {
+      setError('Fjalëkalimet nuk përputhen')
       return
     }
 
@@ -46,23 +39,32 @@ export default function LoginPage() {
 
     const supabase = createClient()
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
+    const { error } = await supabase.auth.updateUser({
+      password,
     })
 
     if (error) {
-      setError('Nuk u dërgua dot email-i. Provo përsëri.')
+      setError(
+        'Linku mund të ketë skaduar ose sesioni nuk është i vlefshëm. Provo përsëri.'
+      )
       setLoading(false)
       return
     }
 
-    setMessage('Email-i për ndryshimin e fjalëkalimit u dërgua.')
-    setLoading(false)
+    setSuccess('Fjalëkalimi u ndryshua me sukses.')
+
+    await supabase.auth.signOut()
+
+    setTimeout(() => {
+      router.push('/login')
+      router.refresh()
+    }, 1500)
   }
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
+
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-sm">
             <RiStore2Line className="text-white text-xl" />
@@ -79,30 +81,19 @@ export default function LoginPage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
-          <h1 className="text-slate-900 font-semibold text-lg mb-6">
-            Hyr në llogari
+          <h1 className="text-slate-900 font-semibold text-lg mb-2">
+            Ndrysho fjalëkalimin
           </h1>
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Email
-              </label>
+          <p className="text-sm text-slate-500 mb-6">
+            Vendos fjalëkalimin tënd të ri.
+          </p>
 
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="email"
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-                placeholder="email@shembull.com"
-              />
-            </div>
+          <form onSubmit={handleResetPassword} className="space-y-4">
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Fjalëkalimi
+                Fjalëkalimi i ri
               </label>
 
               <div className="relative">
@@ -111,15 +102,15 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  autoComplete="current-password"
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition pr-10"
+                  autoComplete="new-password"
+                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition pr-10"
                   placeholder="••••••••"
                 />
 
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                   tabIndex={-1}
                 >
                   {showPassword ? (
@@ -131,15 +122,20 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={handleForgotPassword}
-                disabled={loading}
-                className="text-sm text-blue-600 hover:text-blue-700 hover:underline disabled:opacity-50"
-              >
-                Harrove fjalëkalimin?
-              </button>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Konfirmo fjalëkalimin
+              </label>
+
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+                placeholder="••••••••"
+              />
             </div>
 
             {error && (
@@ -148,9 +144,9 @@ export default function LoginPage() {
               </div>
             )}
 
-            {message && (
+            {success && (
               <div className="text-sm text-green-700 bg-green-50 border border-green-100 px-3.5 py-2.5 rounded-lg">
-                {message}
+                {success}
               </div>
             )}
 
@@ -162,18 +158,20 @@ export default function LoginPage() {
               {loading ? (
                 <>
                   <RiLoader4Line className="animate-spin" />
-                  Duke hyrë...
+                  Duke ruajtur...
                 </>
               ) : (
-                'Hyr'
+                'Ndrysho fjalëkalimin'
               )}
             </button>
+
           </form>
         </div>
 
         <p className="text-center text-xs text-slate-400 mt-6">
           Market OS — Sistem i menaxhimit të marketit
         </p>
+
       </div>
     </div>
   )

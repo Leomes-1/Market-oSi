@@ -31,17 +31,20 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  if (!user && pathname !== '/login') {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
-  }
+ const publicPaths = ['/login', '/reset-password']
+const isPublicPath = publicPaths.includes(pathname)
 
-  if (user && pathname === '/login') {
-    const url = request.nextUrl.clone()
-    url.pathname = '/'
-    return NextResponse.redirect(url)
-  }
+if (!user && !isPublicPath) {
+  const url = request.nextUrl.clone()
+  url.pathname = '/login'
+  return NextResponse.redirect(url)
+}
+
+if (user && pathname === '/login') {
+  const url = request.nextUrl.clone()
+  url.pathname = '/'
+  return NextResponse.redirect(url)
+}
 
   return supabaseResponse
 }
