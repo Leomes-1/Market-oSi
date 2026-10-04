@@ -579,7 +579,7 @@ export default function ProduktetPage() {
               <p className="text-sm text-green-700">
                 Fitimi për njësi:{' '}
                 <strong>
-                  {formatCurrency(Number(form.cmimiShitjes) - Number(form.cmimiBlerjes))}
+                  {(Number(form.cmimiShitjes) - Number(form.cmimiBlerjes)).toFixed(2)} L
                 </strong>{' '}
                 ({(((Number(form.cmimiShitjes) - Number(form.cmimiBlerjes)) / Number(form.cmimiBlerjes)) * 100).toFixed(1)}% marzh)
               </p>
