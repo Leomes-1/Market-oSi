@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
+import { handleApiError } from '@/lib/api'
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const { error } = await requireRole(['admin'])
   if (error) return error
 
@@ -11,7 +12,7 @@ export async function GET(req: NextRequest) {
       orderBy: { createdAt: 'asc' },
     })
     return NextResponse.json(users)
-  } catch {
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+  } catch (error) {
+    return handleApiError(error, 'Users GET')
   }
 }

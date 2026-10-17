@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
+import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
+import { mergeByProductId, validateQuantity } from '@/lib/validation'
 
 export async function PUT(
   req: NextRequest,
@@ -10,122 +12,134 @@ export async function PUT(
   if (error) return error
 
   try {
-    const saleId = parseInt(params.id)
-    if (isNaN(saleId)) {
-      return NextResponse.json({ error: 'ID i pavlefshëm' }, { status: 400 })
-    }
+    const saleId = parseId(params.id)
+    if (saleId === null) return badRequest('ID i pavlefshëm')
 
     const body = await req.json()
     const { items } = body
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: 'Nuk ka produkte në shitje' }, { status: 400 })
+    if (!Array.isArray(items) || items.length === 0) {
+      return badRequest('Nuk ka produkte në shitje')
     }
 
-    const existingSale = await prisma.sale.findUnique({
-      where: { id: saleId },
-      include: { items: true },
-    })
-
-    if (!existingSale) {
-      return NextResponse.json({ error: 'Fatura nuk u gjet' }, { status: 404 })
-    }
-
-    // Map original quantities per productId (for stock restoration check)
-    const originalQtyMap = new Map<number, number>()
-    for (const item of existingSale.items) {
-      originalQtyMap.set(item.productId, (originalQtyMap.get(item.productId) || 0) + item.sasia)
-    }
-
-    // Validate items and calculate new totals
-    let totali = 0
-    let fitimi = 0
-
-    const validatedItems: Array<{
-      productId: number
-      emriProduktit: string
-      sasia: number
-      cmimiBlerjes: number
-      cmimiShitjes: number
-      fitimiItem: number
-    }> = []
-
+    const rawLines: Array<{ productId: number; sasia: number }> = []
     for (const item of items) {
-      const productId = Number(item.productId)
-      const sasia = Number(item.sasia)
-
-      if (isNaN(productId) || isNaN(sasia) || sasia <= 0) {
-        return NextResponse.json({ error: 'Të dhëna të pavlefshme' }, { status: 400 })
+      const productId = Number(item?.productId)
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return badRequest('Produkt i pavlefshëm në shitje')
       }
-
-      const product = await prisma.product.findUnique({ where: { id: productId } })
-      if (!product) {
-        return NextResponse.json({ error: 'Produkti nuk u gjet' }, { status: 404 })
+      const sasia = Number(item?.sasia)
+      if (!Number.isFinite(sasia)) {
+        return badRequest('Sasi e pavlefshme në shitje')
       }
-
-      // Available stock = current stock + original quantity from this sale (will be restored)
-      const originalQty = originalQtyMap.get(productId) || 0
-      const availableStock = product.sasia + originalQty
-
-      if (sasia > availableStock) {
-        return NextResponse.json(
-          { error: `Stoku i pamjaftueshëm për: ${product.emri}. Disponibël: ${availableStock}` },
-          { status: 400 }
-        )
-      }
-
-      const fitimiItem = (product.cmimiShitjes - product.cmimiBlerjes) * sasia
-      totali += product.cmimiShitjes * sasia
-      fitimi += fitimiItem
-
-      validatedItems.push({
-        productId,
-        emriProduktit: product.emri,
-        sasia,
-        cmimiBlerjes: product.cmimiBlerjes,
-        cmimiShitjes: product.cmimiShitjes,
-        fitimiItem,
-      })
+      rawLines.push({ productId, sasia })
     }
+
+    const lines = mergeByProductId(rawLines)
 
     await prisma.$transaction(async (tx) => {
-      // 1. Restore original stock
-      for (const origItem of existingSale.items) {
+      const existingSale = await tx.sale.findUnique({
+        where: { id: saleId },
+        include: { items: true },
+      })
+      if (!existingSale) {
+        throw new ApiFailure('Fatura nuk u gjet', 404, 'NOT_FOUND')
+      }
+
+      // The prices this invoice was actually written at. Keeping these is the
+      // whole point: re-reading today's product prices would silently restate
+      // the revenue and profit of a past period whenever someone corrects a
+      // quantity typo.
+      const originalPrices = new Map(
+        existingSale.items.map((item) => [
+          item.productId,
+          { cmimiBlerjes: item.cmimiBlerjes, cmimiShitjes: item.cmimiShitjes },
+        ])
+      )
+
+      // Put the original quantities back before re-applying the new ones, so
+      // availability is measured against stock as it was before this invoice.
+      for (const original of existingSale.items) {
         await tx.product.update({
-          where: { id: origItem.productId },
-          data: { sasia: { increment: origItem.sasia } },
+          where: { id: original.productId },
+          data: { sasia: { increment: original.sasia } },
         })
       }
 
-      // 2. Delete old sale items
+      const products = await tx.product.findMany({
+        where: { id: { in: lines.map((l) => l.productId) } },
+      })
+      const byId = new Map(products.map((p) => [p.id, p]))
+
+      let totali = 0
+      let fitimi = 0
+      const itemData: Array<{
+        productId: number
+        emriProduktit: string
+        sasia: number
+        cmimiBlerjes: number
+        cmimiShitjes: number
+        fitimi: number
+      }> = []
+
+      for (const line of lines) {
+        const product = byId.get(line.productId)
+        if (!product) {
+          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
+        }
+
+        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
+        if (!qty.ok) {
+          throw new ApiFailure(qty.error, 400, 'VALIDATION')
+        }
+
+        // A line already on this invoice keeps its historical prices. A line
+        // the admin has just added has no history, so it is priced at today's
+        // product price — the only defensible choice for a new line.
+        const historical = originalPrices.get(product.id)
+        const cmimiBlerjes = historical?.cmimiBlerjes ?? product.cmimiBlerjes
+        const cmimiShitjes = historical?.cmimiShitjes ?? product.cmimiShitjes
+
+        const lineFitimi = (cmimiShitjes - cmimiBlerjes) * qty.value
+        totali += cmimiShitjes * qty.value
+        fitimi += lineFitimi
+
+        itemData.push({
+          productId: product.id,
+          emriProduktit: product.emri,
+          sasia: qty.value,
+          cmimiBlerjes,
+          cmimiShitjes,
+          fitimi: lineFitimi,
+        })
+      }
+
       await tx.saleItem.deleteMany({ where: { saleId } })
 
-      // 3. Update sale totals and create new items
+      // Same atomic guard as the create path: stock cannot go below zero.
+      for (const item of itemData) {
+        const updated = await tx.product.updateMany({
+          where: { id: item.productId, sasia: { gte: item.sasia } },
+          data: { sasia: { decrement: item.sasia } },
+        })
+        if (updated.count !== 1) {
+          const current = await tx.product.findUnique({ where: { id: item.productId } })
+          throw new ApiFailure(
+            `Stoku i pamjaftueshëm për: ${item.emriProduktit}. Disponibël: ${current?.sasia ?? 0}`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
+        }
+      }
+
       await tx.sale.update({
         where: { id: saleId },
         data: {
           totali,
           fitimi,
-          items: {
-            create: validatedItems.map((item) => ({
-              productId: item.productId,
-              emriProduktit: item.emriProduktit,
-              sasia: item.sasia,
-              cmimiBlerjes: item.cmimiBlerjes,
-              cmimiShitjes: item.cmimiShitjes,
-              fitimi: item.fitimiItem,
-            })),
-          },
+          items: { create: itemData },
         },
       })
-
-      // 4. Decrement stock for new quantities
-      for (const item of validatedItems) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { sasia: { decrement: item.sasia } },
-        })
-      }
     })
 
     const updatedSale = await prisma.sale.findUnique({
@@ -135,8 +149,7 @@ export async function PUT(
 
     return NextResponse.json(updatedSale)
   } catch (error) {
-    console.error('Sale PUT error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Sale PUT')
   }
 }
 
@@ -148,20 +161,14 @@ export async function DELETE(
   if (error) return error
 
   try {
-    const saleId = parseInt(params.id)
-
-    if (isNaN(saleId)) {
-      return NextResponse.json({ error: 'ID i pavlefshëm' }, { status: 400 })
-    }
+    const saleId = parseId(params.id)
+    if (saleId === null) return badRequest('ID i pavlefshëm')
 
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
       include: { items: true },
     })
-
-    if (!sale) {
-      return NextResponse.json({ error: 'Fatura nuk u gjet' }, { status: 404 })
-    }
+    if (!sale) return notFound('Fatura nuk u gjet')
 
     await prisma.$transaction(async (tx) => {
       for (const item of sale.items) {
@@ -170,13 +177,11 @@ export async function DELETE(
           data: { sasia: { increment: item.sasia } },
         })
       }
-
       await tx.sale.delete({ where: { id: saleId } })
     })
 
-    return NextResponse.json({ success: true })
+    return success()
   } catch (error) {
-    console.error('Sale DELETE error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Sale DELETE')
   }
 }

@@ -34,6 +34,26 @@ export function isLowStock(sasia: number, stokuMinimal: number): boolean {
   return sasia <= stokuMinimal
 }
 
+/**
+ * Margin as a percentage of revenue — profit / revenue.
+ *
+ * The app previously computed this two different ways: the product form used
+ * profit / cost (a markup), while the dashboard and the exports used
+ * profit / revenue. Both were labelled "marzh" and disagreed. This is the one
+ * definition, and it returns null rather than Infinity or NaN when there is
+ * nothing to divide by.
+ */
+export function marginPercent(fitimi: number, totali: number): number | null {
+  if (!Number.isFinite(fitimi) || !Number.isFinite(totali) || totali === 0) return null
+  return (fitimi / totali) * 100
+}
+
+/** Renders a percentage, showing an em dash when the value is undefined. */
+export function formatPercent(value: number | null, digits = 1): string {
+  if (value === null || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(digits)}%`
+}
+
 export function cn(...classes: (string | undefined | null | false)[]): string {
   return classes.filter(Boolean).join(' ')
 }

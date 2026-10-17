@@ -7,7 +7,7 @@ import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
-import { formatCurrency, isLowStock, toArray } from '@/lib/utils'
+import { formatCurrency, formatPercent, isLowStock, marginPercent, toArray } from '@/lib/utils'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -574,14 +574,19 @@ export default function ProduktetPage() {
             </select>
           </div>
           {/* Profit preview */}
-          {form.cmimiBlerjes && form.cmimiShitjes && (
+          {form.cmimiBlerjes !== '' && form.cmimiShitjes !== '' && (
             <div className="sm:col-span-2 p-3 bg-green-50 rounded-lg">
               <p className="text-sm text-green-700">
                 Fitimi për njësi:{' '}
                 <strong>
                   {(Number(form.cmimiShitjes) - Number(form.cmimiBlerjes)).toFixed(2)} L
                 </strong>{' '}
-                ({(((Number(form.cmimiShitjes) - Number(form.cmimiBlerjes)) / Number(form.cmimiBlerjes)) * 100).toFixed(1)}% marzh)
+                ({formatPercent(
+                  marginPercent(
+                    Number(form.cmimiShitjes) - Number(form.cmimiBlerjes),
+                    Number(form.cmimiShitjes)
+                  )
+                )} marzh)
               </p>
             </div>
           )}

@@ -25,7 +25,7 @@ interface Product {
   kategoria: string
   sasia: number
   stokuMinimal: number
-  cmimiBlerjes: number
+  cmimiBlerjes?: number
   cmimiShitjes: number
   njesia: string
 }
@@ -381,8 +381,10 @@ export default function ShitjetPage() {
   }
 
   const totali = cart.reduce((sum, i) => sum + i.product.cmimiShitjes * i.sasia, 0)
+  // cmimiBlerjes is withheld from cashier sessions by the API, so this only
+  // ever resolves for admins — who are the only ones shown the figure.
   const fitimi = cart.reduce(
-    (sum, i) => sum + (i.product.cmimiShitjes - i.product.cmimiBlerjes) * i.sasia,
+    (sum, i) => sum + (i.product.cmimiShitjes - (i.product.cmimiBlerjes ?? 0)) * i.sasia,
     0
   )
 
@@ -428,6 +430,8 @@ export default function ShitjetPage() {
   }
 
   if (!role || !['admin', 'cashier'].includes(role)) return <AccessDenied />
+
+  const isAdmin = role === 'admin'
 
   return (
     <div className="flex flex-col h-full">
@@ -720,10 +724,12 @@ export default function ShitjetPage() {
               <span>Nën-totali</span>
               <span>{formatCurrency(totali)}</span>
             </div>
-            <div className="flex justify-between text-sm text-green-600 font-medium">
-              <span>Fitimi</span>
-              <span>{formatCurrency(fitimi)}</span>
-            </div>
+            {isAdmin && (
+              <div className="flex justify-between text-sm text-green-600 font-medium">
+                <span>Fitimi</span>
+                <span>{formatCurrency(fitimi)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-lg font-bold text-slate-900 pt-2 border-t border-slate-100">
               <span>TOTALI</span>
               <span>{formatCurrency(totali)}</span>

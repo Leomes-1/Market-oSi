@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
-import { formatCurrency, formatDateTime } from '@/lib/utils'
+import { formatCurrency, formatDateTime, formatPercent, marginPercent } from '@/lib/utils'
 import ExportButtons from '@/components/ui/ExportButtons'
 import AccessDenied from '@/components/AccessDenied'
 import { useRole } from '@/contexts/RoleContext'
@@ -120,9 +120,18 @@ export default function Dashboard() {
       if (p === 'custom' && deri) params.set('deri', deri)
 
       fetch(`/api/dashboard?${params}`)
-        .then((r) => r.json())
+        .then(async (r) => {
+          if (r.status === 401) {
+            window.location.href = '/login'
+            return null
+          }
+          // Without this check an error body like { error: "..." } was stored
+          // as if it were dashboard data, and every KPI rendered NaN.
+          if (!r.ok) throw new Error('dashboard request failed')
+          return r.json()
+        })
         .then((d) => {
-          setData(d)
+          if (d) setData(d)
           setLoading(false)
           setRefreshing(false)
         })
@@ -287,7 +296,7 @@ export default function Dashboard() {
           trend={
             data && data.shitjetMuajitTotali > 0
               ? {
-                  value: `${((data.shitjetMuajitFitimi / data.shitjetMuajitTotali) * 100).toFixed(1)}% marzh`,
+                  value: `${formatPercent(marginPercent(data.shitjetMuajitFitimi, data.shitjetMuajitTotali))} marzh`,
                   positive: true,
                 }
               : undefined

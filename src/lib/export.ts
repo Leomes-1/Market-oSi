@@ -207,7 +207,6 @@ export async function exportPDF(data: ExportData): Promise<void> {
         4: { cellWidth: 22, halign: 'right' },
       },
     })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     y = ((doc as any).lastAutoTable?.finalY ?? y) + 8
   } else {
     doc.setFontSize(9)
@@ -249,7 +248,6 @@ export async function exportPDF(data: ExportData): Promise<void> {
       },
       alternateRowStyles: { fillColor: [254, 242, 242] },
     })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     y = ((doc as any).lastAutoTable?.finalY ?? y) + 8
   }
 
@@ -394,7 +392,6 @@ export async function exportExcel(data: ExportData): Promise<void> {
   const date = now.toISOString().slice(0, 10)
   const filename = 'raport-' + safeFilename(data.periudhaLabel) + '-' + date + '.xlsx'
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as any
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

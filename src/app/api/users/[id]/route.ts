@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
+import { badRequest, conflict, handleApiError, notFound, parseId } from '@/lib/api'
+import { Role } from '@/lib/roles'
+
+const VALID_ROLES: Role[] = ['admin', 'cashier', 'staff']
 
 export async function PUT(
   req: NextRequest,
@@ -10,16 +14,28 @@ export async function PUT(
   if (error) return error
 
   try {
-    const id = parseInt(params.id)
-    if (isNaN(id)) {
-      return NextResponse.json({ error: 'ID i pavlefshëm' }, { status: 400 })
-    }
+    const id = parseId(params.id)
+    if (id === null) return badRequest('ID i pavlefshëm')
 
     const body = await req.json()
     const { roli } = body
 
-    if (!['admin', 'cashier', 'staff'].includes(roli)) {
-      return NextResponse.json({ error: 'Rol i pavlefshëm' }, { status: 400 })
+    if (!VALID_ROLES.includes(roli)) {
+      return badRequest('Rol i pavlefshëm')
+    }
+
+    const target = await prisma.userRole.findUnique({ where: { id } })
+    if (!target) return notFound('Përdoruesi nuk u gjet')
+
+    // Demoting the last admin would leave nobody able to reach /perdoruesit,
+    // and there is no create-user endpoint to recover through.
+    if (target.roli === 'admin' && roli !== 'admin') {
+      const adminCount = await prisma.userRole.count({ where: { roli: 'admin' } })
+      if (adminCount <= 1) {
+        return conflict(
+          'Ky është administratori i fundit. Cakto një admin tjetër përpara se të ndryshosh këtë rol.'
+        )
+      }
     }
 
     const userRole = await prisma.userRole.update({
@@ -28,7 +44,7 @@ export async function PUT(
     })
 
     return NextResponse.json(userRole)
-  } catch {
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+  } catch (error) {
+    return handleApiError(error, 'User PUT')
   }
 }

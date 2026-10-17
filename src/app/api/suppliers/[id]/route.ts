@@ -1,23 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { badRequest, handleApiError, parseId, success } from '@/lib/api'
 
 export async function PUT(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
+    const id = parseId(params.id)
+    if (id === null) return badRequest('ID i pavlefshëm')
+
     const body = await req.json()
     const { emri, telefoni, email, adresa, shenime } = body
 
+    if (!emri || typeof emri !== 'string' || !emri.trim()) {
+      return badRequest('Emri i furnitorit është i detyrueshëm')
+    }
+
     const supplier = await prisma.supplier.update({
-      where: { id: Number(params.id) },
-      data: { emri, telefoni, email, adresa, shenime },
+      where: { id },
+      data: {
+        emri: emri.trim(),
+        telefoni: telefoni || null,
+        email: email || null,
+        adresa: adresa || null,
+        shenime: shenime || null,
+      },
       include: { products: { select: { id: true, emri: true } } },
     })
 
     return NextResponse.json(supplier)
-  } catch {
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+  } catch (error) {
+    return handleApiError(error, 'Supplier PUT')
   }
 }
 
@@ -25,10 +43,16 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
-    await prisma.supplier.delete({ where: { id: Number(params.id) } })
-    return NextResponse.json({ sukses: true })
-  } catch {
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    const id = parseId(params.id)
+    if (id === null) return badRequest('ID i pavlefshëm')
+
+    await prisma.supplier.delete({ where: { id } })
+    return success()
+  } catch (error) {
+    return handleApiError(error, 'Supplier DELETE')
   }
 }

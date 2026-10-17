@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { requireRole } from '@/lib/auth-helpers'
+import { requireAuth, requireRole } from '@/lib/auth-helpers'
+import { badRequest, handleApiError } from '@/lib/api'
+import { validatePrice, validateQuantity } from '@/lib/validation'
+
+const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
 
 export async function GET(req: NextRequest) {
+  // Every signed-in role needs the catalogue: admin and staff for /produktet,
+  // cashier for the POS.
+  const { role, error } = await requireAuth()
+  if (error) return error
+
   try {
     const { searchParams } = new URL(req.url)
     const kerkimi = searchParams.get('kerkimi') || ''
@@ -32,10 +41,17 @@ export async function GET(req: NextRequest) {
       ? products.filter((p) => p.sasia <= p.stokuMinimal)
       : products
 
+    // Cashiers work the till and have no business seeing cost prices, which
+    // would let them derive the margin the receipt no longer shows them.
+    if (role === 'cashier') {
+      return NextResponse.json(
+        filtered.map(({ cmimiBlerjes: _cost, ...rest }) => rest)
+      )
+    }
+
     return NextResponse.json(filtered)
   } catch (error) {
-    console.error('Products GET error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Products GET')
   }
 }
 
@@ -58,32 +74,52 @@ export async function POST(req: NextRequest) {
     } = body
 
     if (!emri || !kategoria || cmimiBlerjes == null || cmimiShitjes == null) {
-      return NextResponse.json(
-        { error: 'Fushat e detyrueshme mungojnë' },
-        { status: 400 }
-      )
+      return badRequest('Fushat e detyrueshme mungojnë')
+    }
+
+    const unit = njesia || 'copë'
+
+    const blerjes = validatePrice(cmimiBlerjes, emri)
+    if (!blerjes.ok) return badRequest(blerjes.error)
+
+    const shitjes = validatePrice(cmimiShitjes, emri)
+    if (!shitjes.ok) return badRequest(shitjes.error)
+
+    // Opening stock may legitimately be zero, so only reject negatives here.
+    const stock = sasia == null || sasia === '' ? 0 : Number(sasia)
+    if (!Number.isFinite(stock) || stock < 0) {
+      return badRequest('Sasia fillestare e pavlefshme')
+    }
+    if (stock > 0) {
+      const checked = validateQuantity(stock, unit, emri)
+      if (!checked.ok) return badRequest(checked.error)
+    }
+
+    const minimal = stokuMinimal == null || stokuMinimal === '' ? 5 : Number(stokuMinimal)
+    if (!Number.isFinite(minimal) || minimal < 0) {
+      return badRequest('Stoku minimal i pavlefshëm')
     }
 
     const validBarcodes: string[] = Array.isArray(barcodes)
-      ? (barcodes as string[]).map((b) => b.trim()).filter(Boolean)
+      ? (barcodes as string[]).map((b) => String(b).trim()).filter(Boolean)
       : []
 
     if (validBarcodes.length > 10) {
-      return NextResponse.json(
-        { error: 'Maksimumi 10 barkode për produkt' },
-        { status: 400 }
-      )
+      return badRequest('Maksimumi 10 barkode për produkt')
+    }
+    if (new Set(validBarcodes).size !== validBarcodes.length) {
+      return badRequest('Barkodet e përsëritura nuk lejohen')
     }
 
     const product = await prisma.product.create({
       data: {
         emri,
         kategoria,
-        sasia: Number(sasia) || 0,
-        stokuMinimal: Number(stokuMinimal) || 5,
-        cmimiBlerjes: Number(cmimiBlerjes),
-        cmimiShitjes: Number(cmimiShitjes),
-        njesia: njesia || 'copë',
+        sasia: stock,
+        stokuMinimal: minimal,
+        cmimiBlerjes: blerjes.value,
+        cmimiShitjes: shitjes.value,
+        njesia: unit,
         furnitorId: furnitorId ? Number(furnitorId) : null,
         barcodes: {
           create: validBarcodes.map((barcode) => ({ barcode })),
@@ -93,19 +129,7 @@ export async function POST(req: NextRequest) {
     })
 
     return NextResponse.json(product, { status: 201 })
-  } catch (error: unknown) {
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code: string }).code === 'P2002'
-    ) {
-      return NextResponse.json(
-        { error: 'Barkodi ekziston tashmë' },
-        { status: 409 }
-      )
-    }
-    console.error('Products POST error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+  } catch (error) {
+    return handleApiError(error, 'Products POST', BARCODE_DUPLICATE)
   }
 }

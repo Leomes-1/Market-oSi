@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
+import { handleApiError } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
 
@@ -238,7 +239,6 @@ export async function GET(request: NextRequest) {
       insights,
     })
   } catch (error) {
-    console.error('Dashboard error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Dashboard GET')
   }
 }

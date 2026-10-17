@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { handleApiError } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
     const products = await prisma.product.findMany({
       include: { furnitor: true },
@@ -61,7 +66,6 @@ export async function GET() {
 
     return NextResponse.json({ totalProducts: lowStock.length, groups })
   } catch (error) {
-    console.error('Reorder suggestions error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Reorder suggestions GET')
   }
 }

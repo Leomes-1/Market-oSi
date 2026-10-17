@@ -36,8 +36,14 @@ export default async function RootLayout({
       if (!userRole) {
         const count = await prisma.userRole.count()
         const defaultRole = count === 0 ? 'admin' : 'staff'
-        userRole = await prisma.userRole.create({
-          data: { userId: user.id, email: user.email || '', roli: defaultRole },
+        // upsert, not create: two concurrent first requests from the same new
+        // user both saw no row and both inserted, and the loser's P2002 was
+        // swallowed into role = null — an "Akses i Mohuar" that cleared on
+        // reload.
+        userRole = await prisma.userRole.upsert({
+          where: { userId: user.id },
+          update: {},
+          create: { userId: user.id, email: user.email || '', roli: defaultRole },
         })
       }
       role = userRole.roli as Role

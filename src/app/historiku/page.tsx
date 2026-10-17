@@ -8,7 +8,7 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import ExportButtons from '@/components/ui/ExportButtons'
-import { formatCurrency, formatDateTime, toArray } from '@/lib/utils'
+import { formatCurrency, formatDateTime, formatPercent, marginPercent, toArray } from '@/lib/utils'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -287,7 +287,7 @@ export default function HistorikuPage() {
             </button>
           ))}
         </div>
-        <ExportButtons periudha={periudha} />
+        {isAdmin && <ExportButtons periudha={periudha} />}
       </div>
 
       {/* Summary Cards */}
@@ -476,7 +476,7 @@ export default function HistorikuPage() {
                     <th className="table-th">Produkti</th>
                     <th className="table-th text-center">Sasia</th>
                     <th className="table-th text-right">Çmimi</th>
-                    <th className="table-th text-right">Fitimi</th>
+                    {isAdmin && <th className="table-th text-right">Fitimi</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -485,7 +485,9 @@ export default function HistorikuPage() {
                       <td className="table-td font-medium">{item.emriProduktit}</td>
                       <td className="table-td text-center">{item.sasia}</td>
                       <td className="table-td text-right">{formatCurrency(item.cmimiShitjes * item.sasia)}</td>
-                      <td className="table-td text-right text-green-600">{formatCurrency(item.fitimi)}</td>
+                      {isAdmin && (
+                        <td className="table-td text-right text-green-600">{formatCurrency(item.fitimi)}</td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -497,16 +499,22 @@ export default function HistorikuPage() {
                 <span className="text-slate-500">Totali i Shitjes</span>
                 <span className="font-semibold text-slate-900">{formatCurrency(selectedSale.totali)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Fitimi Neto</span>
-                <span className="font-semibold text-green-700">{formatCurrency(selectedSale.fitimi)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Marzhi</span>
-                <span className="font-semibold text-blue-600">
-                  {((selectedSale.fitimi / selectedSale.totali) * 100).toFixed(1)}%
-                </span>
-              </div>
+              {isAdmin && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Fitimi Neto</span>
+                    <span className="font-semibold text-green-700">
+                      {formatCurrency(selectedSale.fitimi)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Marzhi</span>
+                    <span className="font-semibold text-blue-600">
+                      {formatPercent(marginPercent(selectedSale.fitimi, selectedSale.totali))}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             <button

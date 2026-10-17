@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
+import { mergeByProductId, validateQuantity } from '@/lib/validation'
+import { stripProfitFromSales } from '@/lib/sale-visibility'
 
 export async function GET(req: NextRequest) {
+  const { role, error } = await requireRole(['admin', 'cashier'])
+  if (error) return error
+
   try {
     const { searchParams } = new URL(req.url)
     const periudha = searchParams.get('periudha') || 'sot'
 
     const now = new Date()
     let dateFrom: Date
+    let dateTo: Date | undefined
 
     switch (periudha) {
       case 'sot':
@@ -18,16 +26,9 @@ export async function GET(req: NextRequest) {
         dateFrom = new Date(now)
         dateFrom.setDate(dateFrom.getDate() - 1)
         dateFrom.setHours(0, 0, 0, 0)
-        const djeTomorrow = new Date(dateFrom)
-        djeTomorrow.setDate(djeTomorrow.getDate() + 1)
-        const salesDje = await prisma.sale.findMany({
-          where: {
-            createdAt: { gte: dateFrom, lt: djeTomorrow },
-          },
-          include: { items: { include: { product: true } } },
-          orderBy: { createdAt: 'desc' },
-        })
-        return NextResponse.json(salesDje)
+        dateTo = new Date(dateFrom)
+        dateTo.setDate(dateTo.getDate() + 1)
+        break
       case 'jave':
         dateFrom = new Date(now)
         dateFrom.setDate(dateFrom.getDate() - 7)
@@ -45,108 +46,128 @@ export async function GET(req: NextRequest) {
 
     const sales = await prisma.sale.findMany({
       where: {
-        createdAt: { gte: dateFrom },
+        createdAt: dateTo ? { gte: dateFrom, lt: dateTo } : { gte: dateFrom },
       },
-      include: {
-        items: { include: { product: true } },
-      },
+      include: { items: { include: { product: true } } },
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json(sales)
+    // Cashiers never receive profit or cost figures, not even in the payload.
+    return NextResponse.json(stripProfitFromSales(sales, role))
   } catch (error) {
-    console.error('Sales GET error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Sales GET')
   }
 }
 
+interface IncomingItem {
+  productId: number
+  sasia: number
+}
+
 export async function POST(req: NextRequest) {
+  const { error } = await requireRole(['admin', 'cashier'])
+  if (error) return error
+
   try {
     const body = await req.json()
     const { items, shenime } = body
 
-    if (!items || items.length === 0) {
-      return NextResponse.json(
-        { error: 'Nuk ka produkte në shitje' },
-        { status: 400 }
-      )
+    if (!Array.isArray(items) || items.length === 0) {
+      return badRequest('Nuk ka produkte në shitje')
     }
 
-    // Validate stock and calculate totals
-    let totali = 0
-    let fitimi = 0
-
+    // Normalise the incoming lines before touching the database. Prices are
+    // deliberately ignored here — they are always read from the product.
+    const rawLines: IncomingItem[] = []
     for (const item of items) {
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId },
-      })
-
-      if (!product) {
-        return NextResponse.json(
-          { error: `Produkti nuk u gjet: ${item.emriProduktit}` },
-          { status: 404 }
-        )
+      const productId = Number(item?.productId)
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return badRequest('Produkt i pavlefshëm në shitje')
       }
-
-      if (product.sasia < item.sasia) {
-        return NextResponse.json(
-          { error: `Stoku i pamjaftueshëm për: ${product.emri}. Stoku: ${product.sasia}` },
-          { status: 400 }
-        )
+      const sasia = Number(item?.sasia)
+      if (!Number.isFinite(sasia)) {
+        return badRequest('Sasi e pavlefshme në shitje')
       }
-
-      totali += product.cmimiShitjes * item.sasia
-      fitimi += (product.cmimiShitjes - product.cmimiBlerjes) * item.sasia
+      rawLines.push({ productId, sasia })
     }
 
-    // Create sale and reduce stock in a transaction
-    const sale = await prisma.$transaction(async (tx) => {
-      const newSale = await tx.sale.create({
-        data: {
-          totali,
-          fitimi,
-          shenime: shenime || null,
-          items: {
-            create: await Promise.all(
-              items.map(async (item: {
-                productId: number
-                emriProduktit: string
-                sasia: number
-                cmimiBlerjes: number
-                cmimiShitjes: number
-              }) => {
-                const product = await tx.product.findUnique({
-                  where: { id: item.productId },
-                })
-                return {
-                  productId: item.productId,
-                  emriProduktit: item.emriProduktit,
-                  sasia: item.sasia,
-                  cmimiBlerjes: product!.cmimiBlerjes,
-                  cmimiShitjes: product!.cmimiShitjes,
-                  fitimi: (product!.cmimiShitjes - product!.cmimiBlerjes) * item.sasia,
-                }
-              })
-            ),
-          },
-        },
-        include: { items: { include: { product: true } } },
-      })
+    // The same product listed twice is one line, so the stock check sees the
+    // full quantity instead of each line passing against the same stock.
+    const lines = mergeByProductId(rawLines)
 
-      // Reduce stock for each item
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { sasia: { decrement: item.sasia } },
+    const sale = await prisma.$transaction(async (tx) => {
+      const products = await tx.product.findMany({
+        where: { id: { in: lines.map((l) => l.productId) } },
+      })
+      const byId = new Map(products.map((p) => [p.id, p]))
+
+      let totali = 0
+      let fitimi = 0
+      const itemData: Array<{
+        productId: number
+        emriProduktit: string
+        sasia: number
+        cmimiBlerjes: number
+        cmimiShitjes: number
+        fitimi: number
+      }> = []
+
+      for (const line of lines) {
+        const product = byId.get(line.productId)
+        if (!product) {
+          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
+        }
+
+        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
+        if (!qty.ok) {
+          throw new ApiFailure(qty.error, 400, 'VALIDATION')
+        }
+
+        const lineFitimi = (product.cmimiShitjes - product.cmimiBlerjes) * qty.value
+        totali += product.cmimiShitjes * qty.value
+        fitimi += lineFitimi
+
+        itemData.push({
+          productId: product.id,
+          emriProduktit: product.emri,
+          sasia: qty.value,
+          cmimiBlerjes: product.cmimiBlerjes,
+          cmimiShitjes: product.cmimiShitjes,
+          fitimi: lineFitimi,
         })
       }
 
-      return newSale
+      // Conditional decrement: the `sasia: { gte }` guard and the write are a
+      // single atomic statement, so two tills selling the last unit cannot
+      // both succeed and stock can never be driven below zero.
+      for (const item of itemData) {
+        const updated = await tx.product.updateMany({
+          where: { id: item.productId, sasia: { gte: item.sasia } },
+          data: { sasia: { decrement: item.sasia } },
+        })
+        if (updated.count !== 1) {
+          const current = byId.get(item.productId)
+          throw new ApiFailure(
+            `Stoku i pamjaftueshëm për: ${item.emriProduktit}. Stoku: ${current?.sasia ?? 0}`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
+        }
+      }
+
+      return tx.sale.create({
+        data: {
+          totali,
+          fitimi,
+          shenime: typeof shenime === 'string' && shenime.trim() ? shenime.trim() : null,
+          items: { create: itemData },
+        },
+        include: { items: { include: { product: true } } },
+      })
     })
 
     return NextResponse.json(sale, { status: 201 })
   } catch (error) {
-    console.error('Sales POST error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Sales POST')
   }
 }

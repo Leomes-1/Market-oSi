@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { handleApiError } from '@/lib/api'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
+  // The export carries purchase prices, profit and margin for the whole
+  // business in one payload, so it is admin-only.
+  const { error } = await requireRole(['admin'])
+  if (error) return error
+
   try {
     const { searchParams } = new URL(request.url)
     const periudha = searchParams.get('periudha') || 'sot'
@@ -89,7 +96,6 @@ export async function GET(request: Request) {
       furnizimet,
     })
   } catch (error) {
-    console.error('Export error:', error)
-    return NextResponse.json({ error: 'Gabim ne server' }, { status: 500 })
+    return handleApiError(error, 'Export GET')
   }
 }

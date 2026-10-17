@@ -1,36 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
-    const id = parseInt(params.id)
-    if (isNaN(id)) {
-      return NextResponse.json({ error: 'ID i pavlefshëm' }, { status: 400 })
-    }
+    const id = parseId(params.id)
+    if (id === null) return badRequest('ID i pavlefshëm')
 
     const supply = await prisma.supply.findUnique({
       where: { id },
       include: {
         furnitor: { select: { id: true, emri: true } },
         items: {
-          include: {
-            product: { select: { id: true, emri: true, njesia: true } },
-          },
+          include: { product: { select: { id: true, emri: true, njesia: true } } },
         },
       },
     })
 
-    if (!supply) {
-      return NextResponse.json({ error: 'Furnizimi nuk u gjet' }, { status: 404 })
-    }
+    if (!supply) return notFound('Furnizimi nuk u gjet')
 
     return NextResponse.json(supply)
   } catch (error) {
-    console.error('Supply GET error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Supply GET')
   }
 }
 
@@ -38,11 +36,12 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
-    const id = parseInt(params.id)
-    if (isNaN(id)) {
-      return NextResponse.json({ error: 'ID i pavlefshëm' }, { status: 400 })
-    }
+    const id = parseId(params.id)
+    if (id === null) return badRequest('ID i pavlefshëm')
 
     await prisma.$transaction(async (tx) => {
       const supply = await tx.supply.findUnique({
@@ -50,24 +49,35 @@ export async function DELETE(
         include: { items: true },
       })
 
-      if (!supply) throw new Error('NOT_FOUND')
+      if (!supply) {
+        throw new ApiFailure('Furnizimi nuk u gjet', 404, 'NOT_FOUND')
+      }
 
+      // Reversing a delivery removes stock that may already have been sold.
+      // The conditional guard refuses rather than driving stock negative — the
+      // operator is told which product blocks it and can correct the count
+      // first. This is how negative stock got into the data before.
       for (const item of supply.items) {
-        await tx.product.update({
-          where: { id: item.productId },
+        const updated = await tx.product.updateMany({
+          where: { id: item.productId, sasia: { gte: item.sasia } },
           data: { sasia: { decrement: item.sasia } },
         })
+        if (updated.count !== 1) {
+          const current = await tx.product.findUnique({ where: { id: item.productId } })
+          throw new ApiFailure(
+            `Nuk mund të fshihet: stoku i "${item.emriProduktit}" është ${current?.sasia ?? 0}, ` +
+              `më pak se ${item.sasia} që solli ky furnizim. Korrigjo stokun më parë.`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
+        }
       }
 
       await tx.supply.delete({ where: { id } })
     })
 
-    return NextResponse.json({ success: true })
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message === 'NOT_FOUND') {
-      return NextResponse.json({ error: 'Furnizimi nuk u gjet' }, { status: 404 })
-    }
-    console.error('Supply DELETE error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return success()
+  } catch (error) {
+    return handleApiError(error, 'Supply DELETE')
   }
 }

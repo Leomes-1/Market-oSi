@@ -1,92 +1,129 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { requireRole } from '@/lib/auth-helpers'
+import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
+import { validatePrice, validateQuantity } from '@/lib/validation'
+
+const SUPPLY_INCLUDE = {
+  furnitor: { select: { id: true, emri: true } },
+  items: {
+    include: { product: { select: { id: true, emri: true, njesia: true } } },
+  },
+} as const
 
 export async function GET() {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
     const supplies = await prisma.supply.findMany({
-      include: {
-        furnitor: { select: { id: true, emri: true } },
-        items: {
-          include: {
-            product: { select: { id: true, emri: true, njesia: true } },
-          },
-        },
-      },
+      include: SUPPLY_INCLUDE,
       orderBy: { createdAt: 'desc' },
     })
     return NextResponse.json(supplies)
   } catch (error) {
-    console.error('Supplies GET error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Supplies GET')
   }
 }
 
 export async function POST(req: NextRequest) {
+  const { error } = await requireRole(['admin', 'staff'])
+  if (error) return error
+
   try {
     const body = await req.json()
     const { furnitorId, data, shenime, items } = body
 
-    if (!items || items.length === 0) {
-      return NextResponse.json({ error: 'Nuk ka produkte në furnizim' }, { status: 400 })
+    if (!Array.isArray(items) || items.length === 0) {
+      return badRequest('Nuk ka produkte në furnizim')
     }
+
+    const rawLines: Array<{
+      productId: number
+      sasia: number
+      cmimiBlerjes: number
+      updatePrice: boolean
+    }> = []
 
     for (const item of items) {
-      if (!item.productId) {
-        return NextResponse.json({ error: 'Produkti është i pavlefshëm' }, { status: 400 })
+      const productId = Number(item?.productId)
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return badRequest('Produkti është i pavlefshëm')
       }
-      if (typeof item.sasia !== 'number' || item.sasia <= 0) {
-        return NextResponse.json(
-          { error: `Sasia duhet të jetë pozitive për: ${item.emriProduktit}` },
-          { status: 400 }
-        )
-      }
-      if (typeof item.cmimiBlerjes !== 'number' || item.cmimiBlerjes < 0) {
-        return NextResponse.json(
-          { error: `Çmimi i blerjes i pavlefshëm për: ${item.emriProduktit}` },
-          { status: 400 }
-        )
-      }
+      rawLines.push({
+        productId,
+        sasia: Number(item?.sasia),
+        cmimiBlerjes: Number(item?.cmimiBlerjes),
+        updatePrice: item?.updatePrice === true,
+      })
     }
 
-    const totali = items.reduce(
-      (sum: number, item: { sasia: number; cmimiBlerjes: number }) =>
-        sum + item.sasia * item.cmimiBlerjes,
-      0
-    )
+    let deliveryDate = new Date()
+    if (data) {
+      const parsed = new Date(data)
+      if (Number.isNaN(parsed.getTime())) {
+        return badRequest('Data e furnizimit është e pavlefshme')
+      }
+      deliveryDate = parsed
+    }
 
     const supply = await prisma.$transaction(async (tx) => {
+      const products = await tx.product.findMany({
+        where: { id: { in: rawLines.map((l) => l.productId) } },
+      })
+      const byId = new Map(products.map((p) => [p.id, p]))
+
+      let totali = 0
+      const itemData: Array<{
+        productId: number
+        emriProduktit: string
+        sasia: number
+        njesia: string
+        cmimiBlerjes: number
+        totali: number
+        updatePrice: boolean
+      }> = []
+
+      for (const line of rawLines) {
+        const product = byId.get(line.productId)
+        if (!product) {
+          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
+        }
+
+        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
+        if (!qty.ok) throw new ApiFailure(qty.error, 400, 'VALIDATION')
+
+        const price = validatePrice(line.cmimiBlerjes, product.emri)
+        if (!price.ok) throw new ApiFailure(price.error, 400, 'VALIDATION')
+
+        const lineTotal = qty.value * price.value
+        totali += lineTotal
+
+        itemData.push({
+          productId: product.id,
+          emriProduktit: product.emri,
+          sasia: qty.value,
+          njesia: product.njesia,
+          cmimiBlerjes: price.value,
+          totali: lineTotal,
+          updatePrice: line.updatePrice,
+        })
+      }
+
       const newSupply = await tx.supply.create({
         data: {
           furnitorId: furnitorId ? Number(furnitorId) : null,
-          data: data ? new Date(data) : new Date(),
-          shenime: shenime || null,
+          data: deliveryDate,
+          shenime: typeof shenime === 'string' && shenime.trim() ? shenime.trim() : null,
           totali,
           items: {
-            create: items.map((item: {
-              productId: number
-              emriProduktit: string
-              sasia: number
-              njesia: string
-              cmimiBlerjes: number
-            }) => ({
-              productId: item.productId,
-              emriProduktit: item.emriProduktit,
-              sasia: item.sasia,
-              njesia: item.njesia,
-              cmimiBlerjes: item.cmimiBlerjes,
-              totali: item.sasia * item.cmimiBlerjes,
-            })),
+            create: itemData.map(({ updatePrice: _skip, ...rest }) => rest),
           },
         },
-        include: {
-          furnitor: { select: { id: true, emri: true } },
-          items: {
-            include: { product: { select: { id: true, emri: true, njesia: true } } },
-          },
-        },
+        include: SUPPLY_INCLUDE,
       })
 
-      for (const item of items) {
+      for (const item of itemData) {
         await tx.product.update({
           where: { id: item.productId },
           data: {
@@ -101,7 +138,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(supply, { status: 201 })
   } catch (error) {
-    console.error('Supplies POST error:', error)
-    return NextResponse.json({ error: 'Gabim në server' }, { status: 500 })
+    return handleApiError(error, 'Supplies POST')
   }
 }
