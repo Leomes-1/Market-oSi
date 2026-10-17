@@ -17,6 +17,7 @@ import {
   RiArrowRightLine,
   RiBox3Line,
   RiTruckLine,
+  RiHomeHeartLine,
   RiCalendarLine,
   RiCheckLine,
   RiInformationLine,
@@ -82,6 +83,9 @@ interface DashboardData {
   chartMujor: Array<{ muaj: string; shitjet: number; fitimi: number }>
   topProducts: Array<{ emri: string; njesi: number; fitimi: number }>
   shitjetRecente: RecentSale[]
+  perdorimVetjakKosto: number
+  perdorimVetjakNumri: number
+  perdorimVetjakMuaji: number
   insights: Array<{ type: 'success' | 'warning' | 'info'; text: string }>
 }
 
@@ -269,7 +273,7 @@ export default function Dashboard() {
         </AnimatePresence>
       </div>
 
-      {/* 6 KPI Cards */}
+      {/* 7 KPI Cards */}
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
         <KpiCard
           index={0}
@@ -305,6 +309,14 @@ export default function Dashboard() {
         />
         <KpiCard
           index={3}
+          title={`Përdorim vetjak (kosto) ${periodLabel}`}
+          value={formatCurrency(data?.perdorimVetjakKosto ?? 0)}
+          sub={`${data?.perdorimVetjakNumri ?? 0} regjistrime · nuk është shitje`}
+          icon={<RiHomeHeartLine />}
+          color="slate"
+        />
+        <KpiCard
+          index={4}
           title="Gjithsej Produkte"
           value={data?.produktetTotal ?? 0}
           sub="në inventar"
@@ -312,7 +324,7 @@ export default function Dashboard() {
           color="violet"
         />
         <KpiCard
-          index={4}
+          index={5}
           title="Stok i Ulët"
           value={data?.lowStockCount ?? 0}
           sub={`nga ${data?.produktetTotal ?? 0} produkte`}
@@ -320,7 +332,7 @@ export default function Dashboard() {
           color={data?.lowStockCount && data.lowStockCount > 0 ? 'red' : 'emerald'}
         />
         <KpiCard
-          index={5}
+          index={6}
           title="Gjithsej Furnitorë"
           value={data?.furnitoretTotal ?? 0}
           sub="partnere aktiv"
@@ -525,7 +537,7 @@ export default function Dashboard() {
 
 // ─── KPI Card ────────────────────────────────────────────────────────────────
 
-type KpiColor = 'blue' | 'indigo' | 'emerald' | 'violet' | 'red' | 'amber'
+type KpiColor = 'blue' | 'indigo' | 'emerald' | 'violet' | 'red' | 'amber' | 'slate'
 
 const kpiColorMap: Record<KpiColor, { bg: string; icon: string; border: string }> = {
   blue: { bg: 'bg-blue-50', icon: 'text-blue-600', border: 'border-l-blue-500' },
@@ -534,6 +546,7 @@ const kpiColorMap: Record<KpiColor, { bg: string; icon: string; border: string }
   violet: { bg: 'bg-violet-50', icon: 'text-violet-600', border: 'border-l-violet-500' },
   red: { bg: 'bg-red-50', icon: 'text-red-600', border: 'border-l-red-500' },
   amber: { bg: 'bg-amber-50', icon: 'text-amber-600', border: 'border-l-amber-500' },
+  slate: { bg: 'bg-slate-100', icon: 'text-slate-600', border: 'border-l-slate-400' },
 }
 
 interface KpiCardProps {

@@ -60,6 +60,8 @@ export async function GET(request: NextRequest) {
       yesterdaySales,
       topPeriodProducts,
       recentSales,
+      personalUsePeriod,
+      personalUseMonth,
     ] = await Promise.all([
       prisma.sale.findMany({
         where: { createdAt: { gte: periodStart, lt: periodEnd } },
@@ -109,6 +111,17 @@ export async function GET(request: NextRequest) {
         orderBy: { createdAt: 'desc' },
         take: 5,
         include: { items: true },
+      }),
+      // Personal use is a cost, never revenue: it is aggregated on its own and
+      // deliberately kept out of every total, profit and chart above.
+      prisma.personalUse.aggregate({
+        _sum: { totali: true },
+        _count: true,
+        where: { data: { gte: periodStart, lt: periodEnd } },
+      }),
+      prisma.personalUse.aggregate({
+        _sum: { totali: true },
+        where: { data: { gte: monthStart, lt: tomorrowStart } },
       }),
     ])
 
@@ -236,6 +249,9 @@ export async function GET(request: NextRequest) {
       chartMujor,
       topProducts,
       shitjetRecente: recentSales,
+      perdorimVetjakKosto: personalUsePeriod._sum.totali ?? 0,
+      perdorimVetjakNumri: personalUsePeriod._count,
+      perdorimVetjakMuaji: personalUseMonth._sum.totali ?? 0,
       insights,
     })
   } catch (error) {

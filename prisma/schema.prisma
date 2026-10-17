@@ -45,6 +45,7 @@ model Product {
   saleItems     SaleItem[]
   barcodes      ProductBarcode[]
   supplyItems   SupplyItem[]
+  personalUses  PersonalUse[]
 
   @@index([furnitorId])
 }
@@ -112,6 +113,34 @@ model SaleItem {
 
   @@index([saleId])
   @@index([productId])
+}
+
+/// Stock taken out of the shop for the owner's own use.
+///
+/// Deliberately a separate table from Sale: personal use reduces stock but is
+/// not revenue and has no profit, so it must never be reachable from any sales
+/// query. Keeping it in its own model makes that structural rather than a
+/// filter someone can forget.
+model PersonalUse {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id])
+  /// Snapshotted at the moment of recording, like SaleItem, so later price
+  /// changes cannot restate the cost of past entries.
+  emriProduktit String
+  sasia         Float
+  njesia        String
+  cmimiBlerjes  Float
+  totali        Float
+  data          DateTime @default(now())
+  /// Supabase auth user id + email of whoever recorded it.
+  userId        String
+  userEmail     String
+  shenime       String?
+  createdAt     DateTime @default(now())
+
+  @@index([productId])
+  @@index([data])
 }
 
 model UserRole {
