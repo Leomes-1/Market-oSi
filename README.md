@@ -66,7 +66,7 @@ what you expect.
 
 | Command | Why |
 | --- | --- |
-| `prisma db push` | Writes schema changes with no migration file, so nothing is recorded or reviewable. **This is what left the database with no migration history in the first place.** The `db:push` script still exists in `package.json` — do not use it. |
+| `prisma db push` | Writes schema changes with no migration file, so nothing is recorded or reviewable. **This is what left the database with no migration history in the first place.** The `db:push` npm script has been removed so it cannot be run by accident. |
 | `prisma migrate dev` | Intended for a local dev database. It can decide the schema has drifted and offer to reset, which would drop production data. |
 | `prisma migrate reset` | Drops and recreates the database. |
 
