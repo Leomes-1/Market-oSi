@@ -37,6 +37,13 @@ export async function getAuthUserAndRole(): Promise<AuthResult> {
 
     return { userId: user.id, role, error: null }
   } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      (error as { digest?: unknown }).digest === 'DYNAMIC_SERVER_USAGE'
+    ) {
+      throw error
+    }
     console.error('getAuthUserAndRole:', error)
     return {
       userId: null,

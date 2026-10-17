@@ -18,6 +18,15 @@ import { Role } from './roles'
  * waste.
  */
 
+/** Next's "this route is dynamic" signal, thrown during static analysis. */
+function isDynamicServerError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { digest?: unknown }).digest === 'DYNAMIC_SERVER_USAGE'
+  )
+}
+
 export interface SessionUser {
   userId: string
   email: string
@@ -53,6 +62,11 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     })
     return { userId: user.id, email: created.email, role: created.roli as Role }
   } catch (error) {
+    // Next throws a DynamicServerError while probing whether a route can be
+    // rendered statically. It must propagate — swallowing it would stop Next
+    // marking the route dynamic — and it is not a real failure, so it must not
+    // be logged either.
+    if (isDynamicServerError(error)) throw error
     console.error('getSessionUser:', error)
     return null
   }
