@@ -18,6 +18,7 @@ export type ApiErrorCode =
   | 'DUPLICATE'
   | 'IN_USE'
   | 'INSUFFICIENT_STOCK'
+  | 'CHECK_VIOLATION'
   | 'SERVER_ERROR'
 
 export function apiError(message: string, status: number, code: ApiErrorCode) {
@@ -51,6 +52,41 @@ function prismaCode(error: unknown): string | null {
     if (typeof code === 'string') return code
   }
   return null
+}
+
+/**
+ * Detects a PostgreSQL check-constraint violation (SQLSTATE 23514).
+ *
+ * Prisma has no mapped error code for CHECK constraints, so these arrive as an
+ * unknown request error (or P2010 from a raw query) carrying the driver's own
+ * message. Both shapes are matched here, and the constraint name is returned
+ * so the caller can give a specific message.
+ */
+function checkConstraintName(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null
+
+  const meta = (error as { meta?: { code?: unknown; constraint?: unknown; message?: unknown } }).meta
+  const metaCode = typeof meta?.code === 'string' ? meta.code : null
+  const message = [
+    typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : '',
+    typeof meta?.message === 'string' ? meta.message : '',
+  ].join(' ')
+
+  const is23514 = metaCode === '23514' || /\b23514\b/.test(message)
+  const mentionsCheck = /violates check constraint/i.test(message)
+  if (!is23514 && !mentionsCheck) return null
+
+  if (typeof meta?.constraint === 'string') return meta.constraint
+
+  // The constraint name reaches us differently depending on the call path.
+  // A raw query yields a clean  check constraint "Product_sasia_non_negative"
+  // while the ORM wraps the driver error, escaping the quotes, so the text is
+  // literally  check constraint \"Product_sasia_non_negative\"  — hence the
+  // tolerant delimiter class rather than a plain quote.
+  const named = message.match(/check constraint[\s\\"']*([A-Za-z0-9_]+)/i)
+  return named ? named[1] : ''
 }
 
 /** Field names Prisma reports on a P2002, if it gave us any. */
@@ -112,6 +148,18 @@ export function handleApiError(
   // Record required for the operation was not found.
   if (code === 'P2025') {
     return notFound('Rekordi nuk u gjet')
+  }
+
+  // Database-level CHECK constraint. Today the only one is
+  // Product_sasia_non_negative, the backstop against negative stock.
+  const constraint = checkConstraintName(error)
+  if (constraint !== null) {
+    if (constraint === 'Product_sasia_non_negative') {
+      console.error(`${context}: blocked a write that would make stock negative`, error)
+      return conflict('Stoku nuk mjafton', 'INSUFFICIENT_STOCK')
+    }
+    console.error(`${context}: check constraint ${constraint || '(unnamed)'} violated`, error)
+    return conflict('Të dhënat nuk i plotësojnë kushtet e bazës së të dhënave', 'CHECK_VIOLATION')
   }
 
   console.error(`${context}:`, error)

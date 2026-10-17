@@ -25,6 +25,14 @@ model Product {
   id            Int              @id @default(autoincrement())
   emri          String
   kategoria     String
+  /// Current stock on hand.
+  /// Guarded in the database by the CHECK constraint
+  /// "Product_sasia_non_negative" (sasia >= 0), added in migration
+  /// 1_product_stock_non_negative. Prisma does not model CHECK constraints,
+  /// so it is invisible here and `prisma migrate diff` will never report it —
+  /// do not remove that migration thinking it is unused. A write that would
+  /// drive stock below zero fails with SQLSTATE 23514, which the shared API
+  /// error handler turns into a 409 "Stoku nuk mjafton".
   sasia         Float            @default(0)
   stokuMinimal  Float            @default(5)
   cmimiBlerjes  Float
