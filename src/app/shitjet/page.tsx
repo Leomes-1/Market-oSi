@@ -6,9 +6,10 @@ import AccessDenied from '@/components/AccessDenied'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
-import { formatCurrency, formatDateTime, toArray } from '@/lib/utils'
+import { formatCurrency, formatDateTime } from '@/lib/utils'
+import { useCatalog, type CatalogProduct } from '@/lib/catalog'
+import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import {
-  RiSearchLine,
   RiAddLine,
   RiSubtractLine,
   RiDeleteBin6Line,
@@ -18,17 +19,7 @@ import {
   RiBarcodeLine,
 } from 'react-icons/ri'
 
-interface Product {
-  id: number
-  emri: string
-  barcodes: { barcode: string }[]
-  kategoria: string
-  sasia: number
-  stokuMinimal: number
-  cmimiBlerjes?: number
-  cmimiShitjes: number
-  njesia: string
-}
+type Product = CatalogProduct
 
 interface CartItem {
   product: Product
@@ -55,21 +46,24 @@ function isWeighted(njesia: string) {
 
 export default function ShitjetPage() {
   const { role } = useRole()
-  const [products, setProducts] = useState<Product[]>([])
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([])
+  const {
+    products,
+    loading: productsLoading,
+    error: productsError,
+    findByBarcode,
+    search,
+    refresh: refreshProducts,
+  } = useCatalog()
   const [kerkimi, setKerkimi] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
-  const [productsLoading, setProductsLoading] = useState(true)
-  const [productsError, setProductsError] = useState(false)
   const [receiptModal, setReceiptModal] = useState<CompletedSale | null>(null)
   const [rawValues, setRawValues] = useState<Record<number, string>>({})
   const [barkodi, setBarkodi] = useState('')
   const [scanFlash, setScanFlash] = useState<'success' | 'error' | null>(null)
   const [scanMessage, setScanMessage] = useState('')
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products')
-  const searchRef = useRef<HTMLInputElement>(null)
-  const barcodeRef = useRef<HTMLInputElement>(null)
+  const barcodeRef = useRef<SearchInputHandle>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const receiptModalRef = useRef<CompletedSale | null>(null)
 
@@ -100,62 +94,9 @@ export default function ShitjetPage() {
     return () => document.removeEventListener('click', onDocClick)
   }, [])
 
-  useEffect(() => {
-    setProductsError(false)
-    fetch('/api/products')
-      .then((r) => {
-        if (r.status === 401) { window.location.href = '/login'; return r }
-        return r
-      })
-      .then((r) => r.json())
-      .then((data) => {
-        const arr = toArray<Product>(data, 'products')
-        setProducts(arr)
-        setFilteredProducts(arr)
-      })
-      .catch(() => {
-        setProducts([])
-        setFilteredProducts([])
-        setProductsError(true)
-      })
-      .finally(() => setProductsLoading(false))
-  }, [])
-
-  const refreshProducts = useCallback(() => {
-    fetch('/api/products')
-      .then((r) => r.json())
-      .then((data) => {
-        setProducts(toArray<Product>(data, 'products'))
-      })
-      .catch(() => setProducts([]))
-  }, [])
-
-  useEffect(() => {
-    if (kerkimi.trim() === '') {
-      setFilteredProducts(products)
-    } else {
-      const q = kerkimi.toLowerCase()
-      setFilteredProducts(
-        products.filter(
-          (p) =>
-            p.emri.toLowerCase().includes(q) ||
-            p.barcodes.some((b) => b.barcode.includes(q)) ||
-            p.kategoria.toLowerCase().includes(q)
-        )
-      )
-    }
-  }, [kerkimi, products])
-
-  // O(1) barcode lookup — rebuilt only when product list changes
-  const barcodeMap = useMemo(() => {
-    const map = new Map<string, Product>()
-    for (const p of products) {
-      for (const b of p.barcodes) {
-        if (b.barcode) map.set(b.barcode.trim(), p)
-      }
-    }
-    return map
-  }, [products])
+  // Name/category search runs against the cached catalogue — no request, so
+  // nothing can arrive out of order and flicker.
+  const filteredProducts = useMemo(() => search(kerkimi), [search, kerkimi])
 
   function playBeep(type: 'success' | 'error') {
     try {
@@ -206,16 +147,12 @@ export default function ShitjetPage() {
     }, duration)
   }
 
-  function handleBarcodeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== 'Enter') return
-    e.preventDefault()
-
-    const code = barkodi.trim()
+  function handleBarcodeSubmit(code: string) {
+    // Clear immediately so the next scan can start even while this one is
+    // still being processed.
     setBarkodi('')
 
-    if (!code) return
-
-    const product = barcodeMap.get(code)
+    const product = findByBarcode(code)
 
     if (!product) {
       triggerFlash('error', 'Produkti nuk u gjet', 1500)
@@ -478,59 +415,26 @@ export default function ShitjetPage() {
 
             {/* Barcode Scanner Input */}
             <div>
-              <div className="relative">
-                <RiBarcodeLine
-                  className={`absolute left-3.5 top-1/2 -translate-y-1/2 text-xl transition-colors duration-200 ${
-                    scanFlash === 'success'
-                      ? 'text-green-500'
-                      : scanFlash === 'error'
-                      ? 'text-red-400'
-                      : 'text-slate-400'
-                  }`}
-                />
-                <input
-                  ref={barcodeRef}
-                  type="text"
-                  placeholder="Skano ose shkruaj barkodin..."
-                  value={barkodi}
-                  onChange={(e) => setBarkodi(e.target.value)}
-                  onKeyDown={handleBarcodeKeyDown}
-                  autoFocus
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={`w-full pl-10 pr-10 py-2.5 text-sm font-medium rounded-xl border-2 transition-all duration-200 outline-none ${
-                    scanFlash === 'success'
-                      ? 'border-green-400 bg-green-50 text-green-800 placeholder-green-300'
-                      : scanFlash === 'error'
-                      ? 'border-red-400 bg-red-50 text-red-800 placeholder-red-300'
-                      : 'border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:border-blue-400'
-                  }`}
-                />
-                <AnimatePresence mode="wait">
-                  {scanFlash === 'success' && (
-                    <motion.span
-                      key="ok"
-                      initial={{ scale: 0.5, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-green-500"
-                    >
-                      <RiCheckLine className="text-xl" />
-                    </motion.span>
-                  )}
-                  {scanFlash === 'error' && (
-                    <motion.span
-                      key="err"
-                      initial={{ scale: 0.5, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-red-400 text-lg font-bold leading-none"
-                    >
-                      ✗
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-              </div>
+              <SearchInput
+                ref={barcodeRef}
+                variant="barcode"
+                value={barkodi}
+                onChange={setBarkodi}
+                onSubmit={handleBarcodeSubmit}
+                tone={scanFlash ?? 'neutral'}
+                autoFocus
+                placeholder="Skano ose shkruaj barkodin..."
+                inputClassName="py-2.5 text-sm font-medium rounded-xl border-2"
+                icon={
+                  scanFlash === 'success' ? (
+                    <RiCheckLine className="text-xl" />
+                  ) : scanFlash === 'error' ? (
+                    <span className="text-lg font-bold leading-none">✗</span>
+                  ) : (
+                    <RiBarcodeLine className="text-xl" />
+                  )
+                }
+              />
               <AnimatePresence>
                 {scanMessage && (
                   <motion.p
@@ -548,17 +452,12 @@ export default function ShitjetPage() {
             </div>
 
             {/* Product Name / Category Search */}
-            <div className="relative">
-              <RiSearchLine className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-lg" />
-              <input
-                ref={searchRef}
-                type="text"
-                placeholder="Kërko produkt sipas emrit ose kategorisë..."
-                value={kerkimi}
-                onChange={(e) => setKerkimi(e.target.value)}
-                className="input pl-10 text-sm"
-              />
-            </div>
+            <SearchInput
+              value={kerkimi}
+              onChange={setKerkimi}
+              placeholder="Kërko produkt sipas emrit ose kategorisë..."
+              inputClassName="text-sm"
+            />
           </div>
 
           <div className="flex-1 overflow-y-auto p-3 sm:p-4">

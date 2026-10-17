@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import { motion } from 'framer-motion'
@@ -8,6 +8,9 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatPercent, isLowStock, marginPercent, toArray } from '@/lib/utils'
+import { useCatalog, type CatalogProduct } from '@/lib/catalog'
+import SearchInput from '@/components/ui/SearchInput'
+import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -25,25 +28,7 @@ interface Supplier {
   emri: string
 }
 
-interface ProductBarcode {
-  id: number
-  barcode: string
-}
-
-interface Product {
-  id: number
-  emri: string
-  barcodes: ProductBarcode[]
-  kategoria: string
-  sasia: number
-  stokuMinimal: number
-  cmimiBlerjes: number
-  cmimiShitjes: number
-  njesia: string
-  furnitorId: number | null
-  furnitor: Supplier | null
-  createdAt: string
-}
+type Product = CatalogProduct
 
 const KATEGORITE = [
   'Të Ndryshme',
@@ -74,10 +59,8 @@ const emptyForm = {
 
 export default function ProduktetPage() {
   const { role } = useRole()
-  const [products, setProducts] = useState<Product[]>([])
+  const { products: allProducts, search, loading, error, refresh: refreshCatalog } = useCatalog()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
   const [kerkimi, setKerkimi] = useState('')
   const [kategoriaFilter, setKategoriaFilter] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -89,31 +72,17 @@ export default function ProduktetPage() {
   const [barcodeError, setBarcodeError] = useState('')
   const barcodeInputRef = useRef<HTMLInputElement>(null)
 
-  const safeProducts = Array.isArray(products) ? products : []
   const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
 
-  const fetchProducts = useCallback(async () => {
-    setError(false)
-    const params = new URLSearchParams()
-    if (kerkimi) params.set('kerkimi', kerkimi)
-    if (kategoriaFilter) params.set('kategoria', kategoriaFilter)
-    try {
-      const res = await fetch(`/api/products?${params}`)
-      if (res.status === 401) { window.location.href = '/login'; return }
-      if (!res.ok) throw new Error()
-      const data = await res.json()
-      setProducts(toArray<Product>(data, 'products'))
-    } catch {
-      setError(true)
-      toast.error('Gabim gjatë ngarkimit')
-    } finally {
-      setLoading(false)
-    }
-  }, [kerkimi, kategoriaFilter])
-
-  useEffect(() => {
-    fetchProducts()
-  }, [fetchProducts])
+  // Searching and filtering happen against the cached catalogue, so typing —
+  // or a scanner firing thirteen characters in 100 ms — costs no requests at
+  // all. Previously every keystroke issued its own /api/products call and the
+  // responses raced, which is what made partial matches flash on screen.
+  const safeProducts = useMemo(() => {
+    let list = search(kerkimi)
+    if (kategoriaFilter) list = list.filter((p) => p.kategoria === kategoriaFilter)
+    return list
+  }, [search, kerkimi, kategoriaFilter])
 
   useEffect(() => {
     fetch('/api/suppliers')
@@ -134,7 +103,7 @@ export default function ProduktetPage() {
     setEditProduct(product)
     setForm({
       emri: product.emri,
-      barcodes: product.barcodes.map((b) => b.barcode),
+      barcodes: [...product.barcodes],
       kategoria: product.kategoria,
       sasia: String(product.sasia),
       stokuMinimal: String(product.stokuMinimal),
@@ -168,10 +137,10 @@ export default function ProduktetPage() {
       return
     }
 
-    const isDuplicate = safeProducts.some(
+    const isDuplicate = allProducts.some(
       (p) =>
         (!editProduct || p.id !== editProduct.id) &&
-        p.barcodes.some((b) => b.barcode === code)
+        p.barcodes.includes(code)
     )
     if (isDuplicate) {
       setBarcodeError('Ky barkod ekziston te një produkt tjetër')
@@ -229,7 +198,7 @@ export default function ProduktetPage() {
       }
       toast.success(editProduct ? 'Produkti u përditësua' : 'Produkti u shtua')
       closeModal()
-      fetchProducts()
+      await refreshCatalog()
     } finally {
       setSaving(false)
     }
@@ -240,7 +209,7 @@ export default function ProduktetPage() {
     if (res.ok) {
       toast.success('Produkti u fshi')
       setDeleteModal(null)
-      fetchProducts()
+      await refreshCatalog()
     } else {
       toast.error('Gabim gjatë fshirjes')
     }
@@ -270,16 +239,12 @@ export default function ProduktetPage() {
       {/* Filters */}
       <div className="card p-4 mb-6">
         <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <RiSearchLine className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Kërko produkt, barkod..."
-              value={kerkimi}
-              onChange={(e) => setKerkimi(e.target.value)}
-              className="input pl-10"
-            />
-          </div>
+          <SearchInput
+            className="flex-1"
+            value={kerkimi}
+            onChange={setKerkimi}
+            placeholder="Kërko produkt, barkod..."
+          />
           <div className="relative sm:w-52">
             <RiFilterLine className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <select
@@ -301,7 +266,7 @@ export default function ProduktetPage() {
         {loading ? (
           <TableSkeleton rows={6} cols={7} />
         ) : error ? (
-          <ErrorState message="Gabim gjatë ngarkimit të produkteve" onRetry={fetchProducts} />
+          <ErrorState message="Gabim gjatë ngarkimit të produkteve" onRetry={refreshCatalog} />
         ) : safeProducts.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-slate-400 mb-3">Nuk u gjet asnjë produkt</p>
@@ -330,7 +295,7 @@ export default function ProduktetPage() {
                       key={product.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
-                      transition={{ delay: idx * 0.02 }}
+                      transition={{ delay: rowDelay(idx) }}
                       className="table-row"
                     >
                       <td className="table-td">
@@ -342,7 +307,7 @@ export default function ProduktetPage() {
                         ) : (
                           <div>
                             <span className="font-mono text-xs text-slate-500">
-                              {product.barcodes[0].barcode}
+                              {product.barcodes[0]}
                             </span>
                             {product.barcodes.length > 1 && (
                               <span className="ml-1.5 text-xs text-blue-500">
@@ -364,13 +329,13 @@ export default function ProduktetPage() {
                         )}
                       </td>
                       <td className="table-td text-right text-slate-500">
-                        {formatCurrency(product.cmimiBlerjes)}
+                        {product.cmimiBlerjes == null ? '—' : formatCurrency(product.cmimiBlerjes)}
                       </td>
                       <td className="table-td text-right font-semibold text-slate-900">
                         {formatCurrency(product.cmimiShitjes)}
                       </td>
                       <td className="table-td text-slate-500">
-                        {product.furnitor?.emri || '—'}
+                        {product.furnitorEmri || '—'}
                       </td>
                       <td className="table-td">
                         <div className="flex items-center justify-center gap-2">

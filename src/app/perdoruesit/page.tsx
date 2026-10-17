@@ -7,6 +7,7 @@ import PageHeader from '@/components/ui/PageHeader'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import { ROLE_LABELS, Role } from '@/lib/roles'
+import { rowDelay } from '@/lib/animation'
 import { RiShieldUserLine, RiTeamLine } from 'react-icons/ri'
 
 interface UserEntry {
@@ -130,7 +131,7 @@ export default function PerdoruesitPage() {
                     key={user.id}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: idx * 0.04 }}
+                    transition={{ delay: rowDelay(idx) }}
                     className="table-row"
                   >
                     <td className="table-td font-mono text-slate-400 text-xs">{idx + 1}</td>

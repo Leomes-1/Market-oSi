@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
 import { formatCurrency, formatDateTime, formatPercent, marginPercent } from '@/lib/utils'
+import { rowDelay } from '@/lib/animation'
 import ExportButtons from '@/components/ui/ExportButtons'
 import AccessDenied from '@/components/AccessDenied'
 import { useRole } from '@/contexts/RoleContext'
@@ -96,7 +97,7 @@ const fadeUp = {
   show: (i: number) => ({
     opacity: 1,
     y: 0,
-    transition: { delay: i * 0.06, duration: 0.3, ease: 'easeOut' },
+    transition: { delay: rowDelay(i, 0.06), duration: 0.3, ease: 'easeOut' },
   }),
 }
 

@@ -6,6 +6,7 @@ import AccessDenied from '@/components/AccessDenied'
 import { motion } from 'framer-motion'
 import PageHeader from '@/components/ui/PageHeader'
 import { toArray } from '@/lib/utils'
+import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import { RiAlertLine, RiRefreshLine, RiArrowUpLine } from 'react-icons/ri'
@@ -148,7 +149,7 @@ export default function StokUletPage() {
                       key={product.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
-                      transition={{ delay: idx * 0.04 }}
+                      transition={{ delay: rowDelay(idx) }}
                       className={`table-row ${product.sasia === 0 ? 'bg-red-50' : ''}`}
                     >
                       <td className="table-td">

@@ -3,8 +3,7 @@ import './globals.css'
 import ClientLayout from '@/components/layout/ClientLayout'
 import { Toaster } from 'react-hot-toast'
 import MetaMaskErrorFilter from '@/components/MetaMaskErrorFilter'
-import { createClient } from '@/lib/supabase/server'
-import { prisma } from '@/lib/prisma'
+import { getSessionRole } from '@/lib/session'
 import { Role } from '@/lib/roles'
 
 export const metadata: Metadata = {
@@ -23,34 +22,10 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode
 }) {
-  let role: Role | null = null
-
-  try {
-    const supabase = createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (user) {
-      let userRole = await prisma.userRole.findUnique({ where: { userId: user.id } })
-      if (!userRole) {
-        const count = await prisma.userRole.count()
-        const defaultRole = count === 0 ? 'admin' : 'staff'
-        // upsert, not create: two concurrent first requests from the same new
-        // user both saw no row and both inserted, and the loser's P2002 was
-        // swallowed into role = null — an "Akses i Mohuar" that cleared on
-        // reload.
-        userRole = await prisma.userRole.upsert({
-          where: { userId: user.id },
-          update: {},
-          create: { userId: user.id, email: user.email || '', roli: defaultRole },
-        })
-      }
-      role = userRole.roli as Role
-    }
-  } catch {
-    // If DB is unavailable, proceed without role (middleware still protects routes)
-  }
+  // Deduplicated per request: any other server component in this render that
+  // needs the session reuses this result instead of re-querying. Returns null
+  // if the database is unreachable; middleware still protects the routes.
+  const role: Role | null = await getSessionRole()
 
   return (
     <html lang="sq">

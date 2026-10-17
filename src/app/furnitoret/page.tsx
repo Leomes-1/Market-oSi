@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { toArray } from '@/lib/utils'
+import { rowDelay } from '@/lib/animation'
 import CardSkeleton from '@/components/ui/CardSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -172,7 +173,7 @@ export default function FurnitoretPage() {
               key={supplier.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: idx * 0.06 }}
+              transition={{ delay: rowDelay(idx) }}
               className="card p-5 hover:shadow-md transition-shadow"
             >
               <div className="flex items-start justify-between mb-3">

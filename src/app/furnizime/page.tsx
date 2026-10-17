@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatDate, toArray } from '@/lib/utils'
+import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -422,7 +423,7 @@ export default function FurnizimePage() {
                     key={supply.id}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: idx * 0.03 }}
+                    transition={{ delay: rowDelay(idx) }}
                     className="table-row"
                   >
                     <td className="table-td font-mono font-semibold text-blue-600">
