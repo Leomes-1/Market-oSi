@@ -17,13 +17,18 @@ export interface SupplyLine {
   sasiaSugjeruar?: number
   sasia: number
   cmimiBlerjes: number
+  /** Sale price for this product, editable alongside the purchase price. */
+  cmimiShitjes: number
   updatePrice?: boolean
+  /** Set when a previous delivery's prices are still waiting on old stock. */
+  pendingLabel?: string | null
 }
 
 interface SupplyLineTableProps {
   lines: SupplyLine[]
   onChangeQty: (productId: number, sasia: number) => void
   onChangePrice: (productId: number, cmimiBlerjes: number) => void
+  onChangeSalePrice: (productId: number, cmimiShitjes: number) => void
   onToggleUpdatePrice?: (productId: number) => void
   onRemove?: (productId: number) => void
   /** Shows the "current stock" and "suggested" columns. */
@@ -47,6 +52,7 @@ export default function SupplyLineTable({
   lines,
   onChangeQty,
   onChangePrice,
+  onChangeSalePrice,
   onToggleUpdatePrice,
   onRemove,
   showSuggestion = false,
@@ -102,6 +108,7 @@ export default function SupplyLineTable({
             )}
             <th className="table-th text-center w-28">Sasia</th>
             <th className="table-th text-right w-32">Çm. Blerjes</th>
+            <th className="table-th text-right w-32">Çm. Shitjes</th>
             {onToggleUpdatePrice && <th className="table-th text-center w-20">Përditëso</th>}
             <th className="table-th text-right w-28">Totali</th>
             {onRemove && <th className="table-th w-10" />}
@@ -119,6 +126,9 @@ export default function SupplyLineTable({
                 <td className="table-td">
                   <span className="font-medium text-slate-800">{line.emriProduktit}</span>
                   <span className="text-slate-400 text-xs ml-1.5">{line.njesia}</span>
+                  {line.pendingLabel && (
+                    <p className="text-xs text-amber-600 mt-0.5">⏳ {line.pendingLabel}</p>
+                  )}
                 </td>
 
                 <td className="table-td text-center">
@@ -154,6 +164,20 @@ export default function SupplyLineTable({
                     step="1"
                     value={line.cmimiBlerjes}
                     onChange={(e) => onChangePrice(line.productId, Math.max(0, Number(e.target.value) || 0))}
+                    onFocus={(e) => e.target.select()}
+                    className="input py-1.5 text-sm text-right w-full tabular-nums"
+                  />
+                </td>
+
+                <td className="table-td">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={line.cmimiShitjes}
+                    onChange={(e) =>
+                      onChangeSalePrice(line.productId, Math.max(0, Number(e.target.value) || 0))
+                    }
                     onFocus={(e) => e.target.select()}
                     className="input py-1.5 text-sm text-right w-full tabular-nums"
                   />

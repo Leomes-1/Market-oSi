@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { validateQuantity } from '@/lib/validation'
+import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 
 export const dynamic = 'force-dynamic'
 
@@ -109,14 +110,23 @@ export async function POST(req: NextRequest) {
         )
       }
 
+      // Personal use draws down the old-price stock exactly like a sale, so a
+      // pending price change promotes on schedule whichever way stock leaves.
+      const locked = await tx.product.findUniqueOrThrow({
+        where: { id: productId },
+        select: PRICED_PRODUCT_SELECT,
+      })
+      const pricing = priceConsumption(locked, qty.value)
+      await applyConsumption(tx, productId, qty.value)
+
       return tx.personalUse.create({
         data: {
           productId,
           emriProduktit: product.emri,
           sasia: qty.value,
           njesia: product.njesia,
-          cmimiBlerjes: product.cmimiBlerjes,
-          totali: product.cmimiBlerjes * qty.value,
+          cmimiBlerjes: pricing.cmimiBlerjes,
+          totali: pricing.cmimiBlerjes * qty.value,
           data: dataPerdorimit,
           userId: userId ?? '',
           userEmail: typeof body?.userEmail === 'string' ? body.userEmail : '',

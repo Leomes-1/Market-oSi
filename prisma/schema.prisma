@@ -37,6 +37,21 @@ model Product {
   stokuMinimal  Float            @default(5)
   cmimiBlerjes  Float
   cmimiShitjes  Float
+
+  /// Pending price change, applied only once the old stock is used up.
+  ///
+  /// When a supply arrives with new prices while units bought at the old price
+  /// are still on the shelf, the new prices wait here instead of silently
+  /// re-costing that existing stock. `sasiaVjeter` counts how many units still
+  /// belong to the old prices; every sale and personal-use entry reduces it,
+  /// and when it reaches zero the pending prices are promoted into
+  /// cmimiBlerjes/cmimiShitjes and these three columns are cleared.
+  ///
+  /// All three are null whenever no change is pending.
+  cmimiBlerjesRi Float?
+  cmimiShitjesRi Float?
+  sasiaVjeter    Float?
+
   njesia        String           @default("cope")
   furnitorId    Int?
   furnitor      Supplier?        @relation(fields: [furnitorId], references: [id])
@@ -74,6 +89,9 @@ model SupplyItem {
   sasia         Float
   njesia        String
   cmimiBlerjes  Float
+  /// Sale price set on this delivery, when the operator changed it. Recorded
+  /// for history; the live price lives on Product.
+  cmimiShitjes  Float?
   totali        Float
 
   @@index([supplyId])

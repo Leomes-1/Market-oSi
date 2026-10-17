@@ -15,6 +15,10 @@ export interface CatalogProduct {
   furnitorId: number | null
   furnitorEmri: string | null
   barcodes: string[]
+  /** Pending price change waiting for the old stock to run out, if any. */
+  cmimiShitjesRi: number | null
+  cmimiBlerjesRi?: number | null
+  sasiaVjeter: number | null
 }
 
 /**

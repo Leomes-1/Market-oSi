@@ -8,8 +8,9 @@ import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import SearchInput from '@/components/ui/SearchInput'
 import SupplyLineTable, { type SupplyLine } from '@/components/ui/SupplyLineTable'
-import { useCatalog } from '@/lib/catalog'
+import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { formatCurrency } from '@/lib/utils'
+import { pendingLabel } from '@/lib/pricing'
 import {
   RiArrowLeftLine,
   RiTruckLine,
@@ -41,7 +42,9 @@ export default function FurnizimIRiPage() {
   const [shenime, setShenime] = useState('')
   const [qty, setQty] = useState<Record<number, number>>({})
   const [price, setPrice] = useState<Record<number, number>>({})
+  const [salePrice, setSalePrice] = useState<Record<number, number>>({})
   const [updatePrice, setUpdatePrice] = useState<Record<number, boolean>>({})
+  const [extraIds, setExtraIds] = useState<number[]>([])
   const [saving, setSaving] = useState(false)
 
   // Suppliers are derived from the catalogue, so the page needs no extra fetch.
@@ -75,10 +78,17 @@ export default function FurnizimIRiPage() {
 
   const supplierProducts = useMemo(() => {
     if (!supplierKey) return []
-    return products.filter(
+    const own = products.filter(
       (p) => (p.furnitorId == null ? NO_SUPPLIER : String(p.furnitorId)) === supplierKey
     )
-  }, [products, supplierKey])
+    // The old modal searched the whole catalogue, so a delivery could carry a
+    // product assigned to a different supplier. Those are kept here, appended
+    // to the supplier's own list, so mixed deliveries remain possible.
+    const extras = extraIds
+      .map((id) => products.find((p) => p.id === id))
+      .filter((p): p is CatalogProduct => !!p && !own.some((o) => o.id === p.id))
+    return [...own, ...extras]
+  }, [products, supplierKey, extraIds])
 
   // Seed the per-row purchase price from the product once the supplier is set.
   useEffect(() => {
@@ -87,6 +97,13 @@ export default function FurnizimIRiPage() {
       const next = { ...prev }
       for (const p of supplierProducts) {
         if (next[p.id] === undefined) next[p.id] = p.cmimiBlerjes ?? 0
+      }
+      return next
+    })
+    setSalePrice((prev) => {
+      const next = { ...prev }
+      for (const p of supplierProducts) {
+        if (next[p.id] === undefined) next[p.id] = p.cmimiShitjes
       }
       return next
     })
@@ -110,9 +127,22 @@ export default function FurnizimIRiPage() {
         stokuMinimal: p.stokuMinimal,
         sasia: qty[p.id] ?? 0,
         cmimiBlerjes: price[p.id] ?? p.cmimiBlerjes ?? 0,
+        cmimiShitjes: salePrice[p.id] ?? p.cmimiShitjes,
         updatePrice: updatePrice[p.id] ?? false,
+        pendingLabel: pendingLabel(
+          {
+            id: p.id,
+            sasia: p.sasia,
+            cmimiBlerjes: p.cmimiBlerjes ?? 0,
+            cmimiShitjes: p.cmimiShitjes,
+            cmimiBlerjesRi: p.cmimiBlerjesRi ?? null,
+            cmimiShitjesRi: p.cmimiShitjesRi,
+            sasiaVjeter: p.sasiaVjeter,
+          },
+          p.njesia
+        ),
       }))
-  }, [supplierProducts, productSearch, qty, price, updatePrice])
+  }, [supplierProducts, productSearch, qty, price, salePrice, updatePrice])
 
   // Totals cover every entered row, not just the rows currently filtered in.
   const entered = useMemo(
@@ -125,9 +155,10 @@ export default function FurnizimIRiPage() {
           njesia: p.njesia,
           sasia: qty[p.id],
           cmimiBlerjes: price[p.id] ?? p.cmimiBlerjes ?? 0,
+          cmimiShitjes: salePrice[p.id] ?? p.cmimiShitjes,
           updatePrice: updatePrice[p.id] ?? false,
         })),
-    [supplierProducts, qty, price, updatePrice]
+    [supplierProducts, qty, price, salePrice, updatePrice]
   )
 
   const total = entered.reduce((s, i) => s + i.sasia * i.cmimiBlerjes, 0)
@@ -142,16 +173,38 @@ export default function FurnizimIRiPage() {
 
   // A scanned barcode belonging to this supplier bumps that row by one.
   function handleScan(code: string) {
-    const match = supplierProducts.find((p) => p.barcodes.includes(code))
+    let match = supplierProducts.find((p) => p.barcodes.includes(code))
+
     if (!match) {
-      toast.error('Produkti nuk u gjet te ky furnitor')
-      setProductSearch('')
-      return
+      // Fall back to the whole catalogue: a delivery may legitimately include
+      // a product that belongs to another supplier.
+      const elsewhere = products.find((p) => p.barcodes.includes(code))
+      if (!elsewhere) {
+        toast.error('Produkti nuk u gjet')
+        setProductSearch('')
+        return
+      }
+      setExtraIds((prev) => (prev.includes(elsewhere.id) ? prev : [...prev, elsewhere.id]))
+      toast.success(`${elsewhere.emri} u shtua (${elsewhere.furnitorEmri ?? 'pa furnitor'})`)
+      match = elsewhere
     }
-    setQty((prev) => ({ ...prev, [match.id]: (prev[match.id] ?? 0) + 1 }))
+
+    setQty((prev) => ({ ...prev, [match!.id]: (prev[match!.id] ?? 0) + 1 }))
     setProductSearch('')
-    toast.success(`${match.emri} +1`)
   }
+
+  /** Products from other suppliers matching the filter, offered as extras. */
+  const otherMatches = useMemo(() => {
+    const q = productSearch.trim().toLowerCase()
+    if (!q) return []
+    return products
+      .filter(
+        (p) =>
+          !supplierProducts.some((sp) => sp.id === p.id) &&
+          (p.emri.toLowerCase().includes(q) || p.barcodes.some((b) => b.includes(q)))
+      )
+      .slice(0, 5)
+  }, [products, supplierProducts, productSearch])
 
   async function save() {
     if (entered.length === 0) {
@@ -291,11 +344,37 @@ export default function FurnizimIRiPage() {
               lines={lines}
               onChangeQty={(id, v) => setQty((p) => ({ ...p, [id]: v }))}
               onChangePrice={(id, v) => setPrice((p) => ({ ...p, [id]: v }))}
+              onChangeSalePrice={(id, v) => setSalePrice((p) => ({ ...p, [id]: v }))}
               onToggleUpdatePrice={(id) =>
                 setUpdatePrice((p) => ({ ...p, [id]: !p[id] }))
               }
               emptyMessage="Asnjë produkt për këtë furnitor"
             />
+
+            {otherMatches.length > 0 && (
+              <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+                <p className="text-xs text-slate-500 mb-2">
+                  Nga furnitorë të tjerë — kliko për ta shtuar në këtë furnizim:
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {otherMatches.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => {
+                        setExtraIds((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]))
+                        setProductSearch('')
+                      }}
+                      className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50 transition-colors"
+                    >
+                      {p.emri}
+                      <span className="text-xs text-slate-400 ml-1.5">
+                        {p.furnitorEmri ?? 'pa furnitor'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Sticky footer */}

@@ -32,6 +32,7 @@ interface ProductSuggestion {
   stokuMinimal: number
   njesia: string
   cmimiBlerjes: number
+  cmimiShitjes: number
   sasiaSugjeruar: number
 }
 
@@ -45,6 +46,7 @@ interface SupplierGroup {
 interface Edit {
   sasia: number
   cmimiBlerjes: number
+  cmimiShitjes: number
   removed: boolean
 }
 
@@ -79,7 +81,12 @@ export default function PorositjeTeSugjeruaraPage() {
           nextGroups.flatMap((g) =>
             g.products.map((p) => [
               p.id,
-              { sasia: p.sasiaSugjeruar, cmimiBlerjes: p.cmimiBlerjes, removed: false },
+              {
+                sasia: p.sasiaSugjeruar,
+                cmimiBlerjes: p.cmimiBlerjes,
+                cmimiShitjes: p.cmimiShitjes,
+                removed: false,
+              },
             ])
           )
         )
@@ -129,6 +136,7 @@ export default function PorositjeTeSugjeruaraPage() {
         sasiaSugjeruar: p.sasiaSugjeruar,
         sasia: edits[p.id]?.sasia ?? p.sasiaSugjeruar,
         cmimiBlerjes: edits[p.id]?.cmimiBlerjes ?? p.cmimiBlerjes,
+        cmimiShitjes: edits[p.id]?.cmimiShitjes ?? p.cmimiShitjes,
       })),
     [edits]
   )
@@ -143,6 +151,7 @@ export default function PorositjeTeSugjeruaraPage() {
           njesia: p.njesia,
           sasia: edits[p.id]?.sasia ?? p.sasiaSugjeruar,
           cmimiBlerjes: edits[p.id]?.cmimiBlerjes ?? p.cmimiBlerjes,
+          cmimiShitjes: edits[p.id]?.cmimiShitjes ?? p.cmimiShitjes,
         }))
         .filter((i) => i.sasia > 0),
     [edits]
@@ -338,6 +347,7 @@ export default function PorositjeTeSugjeruaraPage() {
                   showSuggestion
                   onChangeQty={(id, v) => setEdit(id, { sasia: v })}
                   onChangePrice={(id, v) => setEdit(id, { cmimiBlerjes: v })}
+                  onChangeSalePrice={(id, v) => setEdit(id, { cmimiShitjes: v })}
                   onRemove={(id) => setEdit(id, { removed: true })}
                 />
               </div>

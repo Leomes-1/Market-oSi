@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { pendingLabel } from '@/lib/pricing'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import {
   RiAddLine,
@@ -317,6 +318,23 @@ export default function ShitjetPage() {
     return isWeighted(item.product.njesia) ? item.sasia.toFixed(3) : item.sasia.toString()
   }
 
+  // Flags a product whose new prices are waiting for the old stock to sell
+  // through, e.g. "120 L → 100 L pas 2 copëve".
+  function pendingFor(p: CatalogProduct) {
+    return pendingLabel(
+      {
+        id: p.id,
+        sasia: p.sasia,
+        cmimiBlerjes: p.cmimiBlerjes ?? 0,
+        cmimiShitjes: p.cmimiShitjes,
+        cmimiBlerjesRi: p.cmimiBlerjesRi ?? null,
+        cmimiShitjesRi: p.cmimiShitjesRi,
+        sasiaVjeter: p.sasiaVjeter,
+      },
+      p.njesia
+    )
+  }
+
   const totali = cart.reduce((sum, i) => sum + i.product.cmimiShitjes * i.sasia, 0)
   // cmimiBlerjes is withheld from cashier sessions by the API, so this only
   // ever resolves for admins — who are the only ones shown the figure.
@@ -506,6 +524,11 @@ export default function ShitjetPage() {
                         )}
                       </div>
                       <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
+                      {pendingFor(product) && (
+                        <p className="text-xs text-amber-600 mb-1.5 leading-tight">
+                          ⏳ {pendingFor(product)}
+                        </p>
+                      )}
                       <div className="flex items-center justify-between">
                         <span className="text-sm sm:text-base font-bold text-slate-900">
                           {formatCurrency(product.cmimiShitjes)}

@@ -25,6 +25,7 @@ export async function GET() {
       stokuMinimal: number
       njesia: string
       cmimiBlerjes: number
+      cmimiShitjes: number
       sasiaSugjeruar: number
     }
 
@@ -54,6 +55,7 @@ export async function GET() {
         stokuMinimal: p.stokuMinimal,
         njesia: p.njesia,
         cmimiBlerjes: p.cmimiBlerjes,
+        cmimiShitjes: p.cmimiShitjes,
         sasiaSugjeruar,
       })
     }

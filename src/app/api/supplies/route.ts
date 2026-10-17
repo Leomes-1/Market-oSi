@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
+import { planPriceUpdate, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 
 const SUPPLY_INCLUDE = {
   furnitor: { select: { id: true, emri: true } },
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest) {
       productId: number
       sasia: number
       cmimiBlerjes: number
+      cmimiShitjes: number | null
       updatePrice: boolean
     }> = []
 
@@ -54,6 +56,10 @@ export async function POST(req: NextRequest) {
         productId,
         sasia: Number(item?.sasia),
         cmimiBlerjes: Number(item?.cmimiBlerjes),
+        cmimiShitjes:
+          item?.cmimiShitjes === undefined || item?.cmimiShitjes === null || item?.cmimiShitjes === ''
+            ? null
+            : Number(item.cmimiShitjes),
         updatePrice: item?.updatePrice === true,
       })
     }
@@ -80,6 +86,7 @@ export async function POST(req: NextRequest) {
         sasia: number
         njesia: string
         cmimiBlerjes: number
+        cmimiShitjes: number | null
         totali: number
         updatePrice: boolean
       }> = []
@@ -96,6 +103,13 @@ export async function POST(req: NextRequest) {
         const price = validatePrice(line.cmimiBlerjes, product.emri)
         if (!price.ok) throw new ApiFailure(price.error, 400, 'VALIDATION')
 
+        let salePrice: number | null = null
+        if (line.cmimiShitjes !== null) {
+          const sale = validatePrice(line.cmimiShitjes, product.emri)
+          if (!sale.ok) throw new ApiFailure(sale.error, 400, 'VALIDATION')
+          salePrice = sale.value
+        }
+
         const lineTotal = qty.value * price.value
         totali += lineTotal
 
@@ -105,6 +119,7 @@ export async function POST(req: NextRequest) {
           sasia: qty.value,
           njesia: product.njesia,
           cmimiBlerjes: price.value,
+          cmimiShitjes: salePrice,
           totali: lineTotal,
           updatePrice: line.updatePrice,
         })
@@ -124,11 +139,26 @@ export async function POST(req: NextRequest) {
       })
 
       for (const item of itemData) {
+        // Prices are planned against the stock as it stands BEFORE this
+        // delivery lands, so existing units are what decides whether the new
+        // prices apply now or wait their turn.
+        const before = await tx.product.findUniqueOrThrow({
+          where: { id: item.productId },
+          select: PRICED_PRODUCT_SELECT,
+        })
+
+        const priceData = item.updatePrice
+          ? planPriceUpdate(before, {
+              cmimiBlerjes: item.cmimiBlerjes,
+              ...(item.cmimiShitjes !== null ? { cmimiShitjes: item.cmimiShitjes } : {}),
+            })
+          : {}
+
         await tx.product.update({
           where: { id: item.productId },
           data: {
             sasia: { increment: item.sasia },
-            ...(item.updatePrice ? { cmimiBlerjes: item.cmimiBlerjes } : {}),
+            ...priceData,
           },
         })
       }

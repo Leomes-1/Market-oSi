@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { mergeByProductId, validateQuantity } from '@/lib/validation'
+import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { stripProfitFromSales } from '@/lib/sale-visibility'
 
 export async function GET(req: NextRequest) {
@@ -101,6 +102,21 @@ export async function POST(req: NextRequest) {
       })
       const byId = new Map(products.map((p) => [p.id, p]))
 
+      // Validate every line before touching stock, so a bad line fails the
+      // whole sale rather than half-applying it.
+      const validated: Array<{ productId: number; emri: string; sasia: number }> = []
+      for (const line of lines) {
+        const product = byId.get(line.productId)
+        if (!product) {
+          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
+        }
+        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
+        if (!qty.ok) {
+          throw new ApiFailure(qty.error, 400, 'VALIDATION')
+        }
+        validated.push({ productId: product.id, emri: product.emri, sasia: qty.value })
+      }
+
       let totali = 0
       let fitimi = 0
       const itemData: Array<{
@@ -112,47 +128,46 @@ export async function POST(req: NextRequest) {
         fitimi: number
       }> = []
 
-      for (const line of lines) {
-        const product = byId.get(line.productId)
-        if (!product) {
-          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
-        }
-
-        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
-        if (!qty.ok) {
-          throw new ApiFailure(qty.error, 400, 'VALIDATION')
-        }
-
-        const lineFitimi = (product.cmimiShitjes - product.cmimiBlerjes) * qty.value
-        totali += product.cmimiShitjes * qty.value
-        fitimi += lineFitimi
-
-        itemData.push({
-          productId: product.id,
-          emriProduktit: product.emri,
-          sasia: qty.value,
-          cmimiBlerjes: product.cmimiBlerjes,
-          cmimiShitjes: product.cmimiShitjes,
-          fitimi: lineFitimi,
-        })
-      }
-
-      // Conditional decrement: the `sasia: { gte }` guard and the write are a
-      // single atomic statement, so two tills selling the last unit cannot
-      // both succeed and stock can never be driven below zero.
-      for (const item of itemData) {
+      for (const line of validated) {
+        // Conditional decrement: the `sasia: { gte }` guard and the write are a
+        // single atomic statement, so two tills selling the last unit cannot
+        // both succeed and stock can never be driven below zero. It also takes
+        // the row lock, which is what makes the re-read below consistent.
         const updated = await tx.product.updateMany({
-          where: { id: item.productId, sasia: { gte: item.sasia } },
-          data: { sasia: { decrement: item.sasia } },
+          where: { id: line.productId, sasia: { gte: line.sasia } },
+          data: { sasia: { decrement: line.sasia } },
         })
         if (updated.count !== 1) {
-          const current = byId.get(item.productId)
+          const current = byId.get(line.productId)
           throw new ApiFailure(
-            `Stoku i pamjaftueshëm për: ${item.emriProduktit}. Stoku: ${current?.sasia ?? 0}`,
+            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
             409,
             'INSUFFICIENT_STOCK'
           )
         }
+
+        // Re-read under the lock: prices and the pending-change counters must
+        // be the committed values, not what a concurrent sale saw earlier.
+        const locked = await tx.product.findUniqueOrThrow({
+          where: { id: line.productId },
+          select: PRICED_PRODUCT_SELECT,
+        })
+
+        const pricing = priceConsumption(locked, line.sasia)
+        await applyConsumption(tx, line.productId, line.sasia)
+
+        const lineFitimi = (pricing.cmimiShitjes - pricing.cmimiBlerjes) * line.sasia
+        totali += pricing.cmimiShitjes * line.sasia
+        fitimi += lineFitimi
+
+        itemData.push({
+          productId: line.productId,
+          emriProduktit: line.emri,
+          sasia: line.sasia,
+          cmimiBlerjes: pricing.cmimiBlerjes,
+          cmimiShitjes: pricing.cmimiShitjes,
+          fitimi: lineFitimi,
+        })
       }
 
       return tx.sale.create({

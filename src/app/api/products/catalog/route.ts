@@ -31,6 +31,10 @@ export interface CatalogProduct {
   furnitorId: number | null
   furnitorEmri: string | null
   barcodes: string[]
+  /** Pending price change waiting for the old stock to run out, if any. */
+  cmimiShitjesRi: number | null
+  cmimiBlerjesRi?: number | null
+  sasiaVjeter: number | null
 }
 
 export async function GET() {
@@ -51,6 +55,9 @@ export async function GET() {
         furnitorId: true,
         furnitor: { select: { emri: true } },
         barcodes: { select: { barcode: true } },
+        cmimiShitjesRi: true,
+        cmimiBlerjesRi: true,
+        sasiaVjeter: true,
       },
       orderBy: { emri: 'asc' },
     })
@@ -69,6 +76,9 @@ export async function GET() {
       furnitorId: p.furnitorId,
       furnitorEmri: p.furnitor?.emri ?? null,
       barcodes: p.barcodes.map((b) => b.barcode),
+      cmimiShitjesRi: p.cmimiShitjesRi,
+      ...(showCost ? { cmimiBlerjesRi: p.cmimiBlerjesRi } : {}),
+      sasiaVjeter: p.sasiaVjeter,
     }))
 
     return NextResponse.json(catalog)

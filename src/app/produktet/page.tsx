@@ -9,6 +9,7 @@ import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatPercent, isLowStock, marginPercent, toArray } from '@/lib/utils'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { pendingLabel } from '@/lib/pricing'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
@@ -208,6 +209,23 @@ export default function ProduktetPage() {
     }
   }
 
+  // "120 L → 100 L pas 2 copëve" when a delivery's prices are still waiting
+  // for the old stock to run out.
+  function pendingFor(p: CatalogProduct) {
+    return pendingLabel(
+      {
+        id: p.id,
+        sasia: p.sasia,
+        cmimiBlerjes: p.cmimiBlerjes ?? 0,
+        cmimiShitjes: p.cmimiShitjes,
+        cmimiBlerjesRi: p.cmimiBlerjesRi ?? null,
+        cmimiShitjesRi: p.cmimiShitjesRi,
+        sasiaVjeter: p.sasiaVjeter,
+      },
+      p.njesia
+    )
+  }
+
   const lowStockCount = safeProducts.filter((p) => isLowStock(p.sasia, p.stokuMinimal)).length
 
   if (!role || !['admin', 'staff'].includes(role)) return <AccessDenied />
@@ -326,6 +344,11 @@ export default function ProduktetPage() {
                       </td>
                       <td className="table-td text-right font-semibold text-slate-900">
                         {formatCurrency(product.cmimiShitjes)}
+                        {pendingFor(product) && (
+                          <p className="text-xs font-normal text-amber-600 mt-0.5 whitespace-nowrap">
+                            ⏳ {pendingFor(product)}
+                          </p>
+                        )}
                       </td>
                       <td className="table-td text-slate-500">
                         {product.furnitorEmri || '—'}
