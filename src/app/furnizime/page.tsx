@@ -10,6 +10,7 @@ import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatDate, toArray } from '@/lib/utils'
 import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
+import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import ErrorState from '@/components/ui/ErrorState'
 import {
   RiBox3Line,
@@ -101,7 +102,7 @@ export default function FurnizimePage() {
   const [saving, setSaving] = useState(false)
   const [productSearch, setProductSearch] = useState('')
   const [showProductSearch, setShowProductSearch] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<SearchInputHandle>(null)
 
   // Detail / delete modals
   const [selectedSupply, setSelectedSupply] = useState<Supply | null>(null)
@@ -183,11 +184,7 @@ export default function FurnizimePage() {
     }
   }
 
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== 'Enter') return
-    e.preventDefault()
-    const query = productSearch.trim()
-    if (!query) return
+  const handleBarcodeSubmit = (query: string) => {
     const matched = products.find((p) =>
       p.barcodes.some((b) => b.barcode === query)
     )
@@ -643,15 +640,16 @@ export default function FurnizimePage() {
             ) : (
               <div>
                 <div className="flex items-center gap-2 mb-2">
-                  <input
+                  <SearchInput
                     ref={searchInputRef}
-                    type="text"
-                    placeholder="Kërko emrin ose skano barkod..."
+                    className="flex-1"
+                    variant="barcode"
                     value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    onKeyDown={handleSearchKeyDown}
+                    onChange={setProductSearch}
+                    onSubmit={handleBarcodeSubmit}
                     autoFocus
-                    className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Kërko emrin ose skano barkod..."
+                    inputClassName="text-sm"
                   />
                   <button
                     onClick={() => {

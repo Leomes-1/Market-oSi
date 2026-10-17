@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import ExportButtons from '@/components/ui/ExportButtons'
+import SearchInput from '@/components/ui/SearchInput'
 import { formatCurrency, formatDateTime, formatPercent, marginPercent, toArray } from '@/lib/utils'
 import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
@@ -639,13 +640,13 @@ export default function HistorikuPage() {
               ) : (
                 <div>
                   <div className="flex items-center gap-2 mb-2">
-                    <input
-                      type="text"
-                      placeholder="Kërko produkt për të shtuar..."
+                    <SearchInput
+                      className="flex-1"
                       value={addProductSearch}
-                      onChange={(e) => setAddProductSearch(e.target.value)}
+                      onChange={setAddProductSearch}
                       autoFocus
-                      className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Kërko produkt për të shtuar..."
+                      inputClassName="text-sm"
                     />
                     <button
                       onClick={() => {

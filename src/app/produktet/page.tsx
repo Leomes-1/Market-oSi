@@ -9,7 +9,7 @@ import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatPercent, isLowStock, marginPercent, toArray } from '@/lib/utils'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
-import SearchInput from '@/components/ui/SearchInput'
+import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
@@ -70,7 +70,7 @@ export default function ProduktetPage() {
   const [saving, setSaving] = useState(false)
   const [barcodeInput, setBarcodeInput] = useState('')
   const [barcodeError, setBarcodeError] = useState('')
-  const barcodeInputRef = useRef<HTMLInputElement>(null)
+  const barcodeInputRef = useRef<SearchInputHandle>(null)
 
   const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
 
@@ -123,8 +123,8 @@ export default function ProduktetPage() {
     setBarcodeError('')
   }
 
-  function handleBarcodeAdd() {
-    const code = barcodeInput.trim()
+  function handleBarcodeAdd(submitted?: string) {
+    const code = (submitted ?? barcodeInput).trim()
     if (!code) return
 
     if (form.barcodes.includes(code)) {
@@ -151,13 +151,6 @@ export default function ProduktetPage() {
     setBarcodeInput('')
     setBarcodeError('')
     barcodeInputRef.current?.focus()
-  }
-
-  function handleBarcodeInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      handleBarcodeAdd()
-    }
   }
 
   function removeBarcode(idx: number) {
@@ -393,24 +386,20 @@ export default function ProduktetPage() {
             </div>
 
             {/* Scan input */}
-            <div className="relative mb-2">
-              <RiBarcodeLine className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg" />
-              <input
-                ref={barcodeInputRef}
-                type="text"
-                value={barcodeInput}
-                onChange={(e) => {
-                  setBarcodeInput(e.target.value)
-                  if (barcodeError) setBarcodeError('')
-                }}
-                onKeyDown={handleBarcodeInputKeyDown}
-                placeholder="Skano ose shkruaj barkodin..."
-                className={`input pl-9 font-mono ${barcodeError ? 'border-red-400 focus:border-red-400' : ''}`}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={form.barcodes.length >= 10}
-              />
-            </div>
+            <SearchInput
+              ref={barcodeInputRef}
+              className="mb-2"
+              variant="barcode"
+              value={barcodeInput}
+              onChange={(v) => {
+                setBarcodeInput(v)
+                if (barcodeError) setBarcodeError('')
+              }}
+              onSubmit={handleBarcodeAdd}
+              tone={barcodeError ? 'error' : 'neutral'}
+              placeholder="Skano ose shkruaj barkodin..."
+              disabled={form.barcodes.length >= 10}
+            />
 
             {barcodeError && (
               <p className="text-xs text-red-500 mb-2 pl-0.5">{barcodeError}</p>
@@ -442,7 +431,7 @@ export default function ProduktetPage() {
             {form.barcodes.length < 10 && (
               <button
                 type="button"
-                onClick={handleBarcodeAdd}
+                onClick={() => handleBarcodeAdd()}
                 className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 mt-0.5"
               >
                 <RiAddLine />
