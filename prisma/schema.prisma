@@ -16,7 +16,7 @@ model Supplier {
   adresa    String?
   shenime   String?
   createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  updatedAt DateTime   @default(now()) @updatedAt
   products  Product[]
   supplies  Supply[]
 }
@@ -33,10 +33,12 @@ model Product {
   furnitorId    Int?
   furnitor      Supplier?        @relation(fields: [furnitorId], references: [id])
   createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  updatedAt     DateTime         @default(now()) @updatedAt
   saleItems     SaleItem[]
   barcodes      ProductBarcode[]
   supplyItems   SupplyItem[]
+
+  @@index([furnitorId])
 }
 
 model Supply {
@@ -47,8 +49,10 @@ model Supply {
   shenime    String?
   totali     Float        @default(0)
   createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  updatedAt  DateTime     @default(now()) @updatedAt
   items      SupplyItem[]
+
+  @@index([furnitorId])
 }
 
 model SupplyItem {
@@ -62,6 +66,9 @@ model SupplyItem {
   njesia        String
   cmimiBlerjes  Float
   totali        Float
+
+  @@index([supplyId])
+  @@index([productId])
 }
 
 model ProductBarcode {
@@ -70,6 +77,8 @@ model ProductBarcode {
   productId Int
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+
+  @@index([productId])
 }
 
 model Sale {
@@ -92,6 +101,9 @@ model SaleItem {
   fitimi          Float
   sale            Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product         Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@index([productId])
 }
 
 model UserRole {
@@ -100,5 +112,5 @@ model UserRole {
   email     String
   roli      String   @default("staff")
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
