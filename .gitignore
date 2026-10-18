@@ -16,6 +16,10 @@ prisma/*.db-journal
 .env.local
 .env.*.local
 
+# Database dumps and recovery snapshots — business data, never commit
+recovery/
+*.dump
+
 # Misc
 .DS_Store
 *.pem

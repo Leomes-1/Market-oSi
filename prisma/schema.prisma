@@ -133,16 +133,40 @@ model SaleItem {
   @@index([productId])
 }
 
-/// Stock taken out of the shop for the owner's own use.
+/// One personal-use registration: stock taken out of the shop for the owner's
+/// own use, recorded in a single action like a sale.
 ///
-/// Deliberately a separate table from Sale: personal use reduces stock but is
-/// not revenue and has no profit, so it must never be reachable from any sales
-/// query. Keeping it in its own model makes that structural rather than a
+/// Header/line split mirrors Sale/SaleItem and Supply/SupplyItem, so the shape
+/// is the one already used everywhere else. Date, user and note belong to the
+/// registration as a whole — holding them per line would duplicate them and
+/// let the lines of one registration disagree with each other.
+///
+/// Deliberately separate from Sale: personal use reduces stock but is not
+/// revenue and has no profit, so it must never be reachable from a sales
+/// query. Keeping it in its own tables makes that structural rather than a
 /// filter someone can forget.
+model PersonalUseEntry {
+  id        Int               @id @default(autoincrement())
+  data      DateTime          @default(now())
+  /// Supabase auth user id + email of whoever recorded it.
+  userId    String
+  userEmail String
+  shenime   String?
+  /// Sum of the line totals, denormalised like Sale.totali.
+  totali    Float             @default(0)
+  createdAt DateTime          @default(now())
+  items     PersonalUse[]
+
+  @@index([data])
+}
+
+/// One product line of a personal-use registration.
 model PersonalUse {
-  id            Int      @id @default(autoincrement())
+  id            Int              @id @default(autoincrement())
+  entryId       Int
+  entry         PersonalUseEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
   productId     Int
-  product       Product  @relation(fields: [productId], references: [id])
+  product       Product          @relation(fields: [productId], references: [id])
   /// Snapshotted at the moment of recording, like SaleItem, so later price
   /// changes cannot restate the cost of past entries.
   emriProduktit String
@@ -150,15 +174,10 @@ model PersonalUse {
   njesia        String
   cmimiBlerjes  Float
   totali        Float
-  data          DateTime @default(now())
-  /// Supabase auth user id + email of whoever recorded it.
-  userId        String
-  userEmail     String
-  shenime       String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime         @default(now())
 
+  @@index([entryId])
   @@index([productId])
-  @@index([data])
 }
 
 model UserRole {

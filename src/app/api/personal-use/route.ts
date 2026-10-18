@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
-import { validateQuantity } from '@/lib/validation'
+import { mergeByProductId, validateQuantity } from '@/lib/validation'
 import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 
 export const dynamic = 'force-dynamic'
@@ -10,10 +10,16 @@ export const dynamic = 'force-dynamic'
 /**
  * Personal use — stock the owner takes for themselves.
  *
- * Reduces stock exactly as a sale does, with the same validation and the same
- * atomic guard, but lives in its own table so it can never leak into revenue,
- * profit or any sales report.
+ * One registration holds several product lines, the same header/line shape as
+ * Sale/SaleItem. Stock is reduced exactly as a sale reduces it, with the same
+ * validation and the same atomic guard, but it lives in its own tables so it
+ * can never leak into revenue, profit or any sales report.
  */
+
+interface IncomingItem {
+  productId: number
+  sasia: number
+}
 
 export async function GET(req: NextRequest) {
   const { error } = await requireRole(['admin'])
@@ -41,10 +47,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const entries = await prisma.personalUse.findMany({
+    const entries = await prisma.personalUseEntry.findMany({
       where,
       orderBy: { data: 'desc' },
       take: 500,
+      include: { items: { orderBy: { id: 'asc' } } },
     })
 
     // Cost per calendar month, newest first, for the summary strip.
@@ -74,13 +81,30 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json()
-    const productId = Number(body?.productId)
-    if (!Number.isInteger(productId) || productId <= 0) {
-      return badRequest('Produkt i pavlefshëm')
+    const { items, shenime } = body
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return badRequest('Nuk ka produkte në regjistrim')
     }
-    if (!Number.isFinite(Number(body?.sasia))) {
-      return badRequest('Sasi e pavlefshme')
+
+    // Normalise the incoming lines before touching the database. Costs are
+    // deliberately ignored here — they are always read from the product.
+    const rawLines: IncomingItem[] = []
+    for (const item of items) {
+      const productId = Number(item?.productId)
+      if (!Number.isInteger(productId) || productId <= 0) {
+        return badRequest('Produkt i pavlefshëm në regjistrim')
+      }
+      const sasia = Number(item?.sasia)
+      if (!Number.isFinite(sasia)) {
+        return badRequest('Sasi e pavlefshme në regjistrim')
+      }
+      rawLines.push({ productId, sasia })
     }
+
+    // The same product listed twice is one line, so the stock check sees the
+    // full quantity instead of each line passing against the same stock.
+    const lines = mergeByProductId(rawLines)
 
     let dataPerdorimit = new Date()
     if (body?.data) {
@@ -89,52 +113,99 @@ export async function POST(req: NextRequest) {
       dataPerdorimit = parsed
     }
 
+    // Taken from the session's own role row, never from the request body.
+    const userEmail =
+      (await prisma.userRole.findUnique({
+        where: { userId: userId ?? '' },
+        select: { email: true },
+      }))?.email ?? ''
+
     const entry = await prisma.$transaction(async (tx) => {
-      const product = await tx.product.findUnique({ where: { id: productId } })
-      if (!product) throw new ApiFailure('Produkti nuk u gjet', 404, 'NOT_FOUND')
-
-      const qty = validateQuantity(body.sasia, product.njesia, product.emri)
-      if (!qty.ok) throw new ApiFailure(qty.error, 400, 'VALIDATION')
-
-      // Same conditional decrement as a sale: the guard and the write are one
-      // statement, so stock cannot be driven below zero.
-      const updated = await tx.product.updateMany({
-        where: { id: productId, sasia: { gte: qty.value } },
-        data: { sasia: { decrement: qty.value } },
+      const products = await tx.product.findMany({
+        where: { id: { in: lines.map((l) => l.productId) } },
       })
-      if (updated.count !== 1) {
-        throw new ApiFailure(
-          `Stoku i pamjaftueshëm për: ${product.emri}. Stoku: ${product.sasia}`,
-          409,
-          'INSUFFICIENT_STOCK'
-        )
+      const byId = new Map(products.map((p) => [p.id, p]))
+
+      // Validate every line before touching stock, so a bad line fails the
+      // whole registration rather than half-applying it.
+      const validated: Array<{ productId: number; emri: string; njesia: string; sasia: number }> = []
+      for (const line of lines) {
+        const product = byId.get(line.productId)
+        if (!product) {
+          throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
+        }
+        const qty = validateQuantity(line.sasia, product.njesia, product.emri)
+        if (!qty.ok) {
+          throw new ApiFailure(qty.error, 400, 'VALIDATION')
+        }
+        validated.push({
+          productId: product.id,
+          emri: product.emri,
+          njesia: product.njesia,
+          sasia: qty.value,
+        })
       }
 
-      // Personal use draws down the old-price stock exactly like a sale, so a
-      // pending price change promotes on schedule whichever way stock leaves.
-      const locked = await tx.product.findUniqueOrThrow({
-        where: { id: productId },
-        select: PRICED_PRODUCT_SELECT,
-      })
-      const pricing = priceConsumption(locked, qty.value)
-      await applyConsumption(tx, productId, qty.value)
+      let totali = 0
+      const itemData: Array<{
+        productId: number
+        emriProduktit: string
+        sasia: number
+        njesia: string
+        cmimiBlerjes: number
+        totali: number
+      }> = []
 
-      return tx.personalUse.create({
-        data: {
-          productId,
-          emriProduktit: product.emri,
-          sasia: qty.value,
-          njesia: product.njesia,
+      for (const line of validated) {
+        // Conditional decrement: the `sasia: { gte }` guard and the write are a
+        // single atomic statement, so stock can never be driven below zero. It
+        // also takes the row lock, which is what makes the re-read consistent.
+        const updated = await tx.product.updateMany({
+          where: { id: line.productId, sasia: { gte: line.sasia } },
+          data: { sasia: { decrement: line.sasia } },
+        })
+        if (updated.count !== 1) {
+          const current = byId.get(line.productId)
+          throw new ApiFailure(
+            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
+        }
+
+        // Personal use draws down the old-price stock exactly like a sale, so a
+        // pending price change promotes on schedule whichever way stock leaves.
+        const locked = await tx.product.findUniqueOrThrow({
+          where: { id: line.productId },
+          select: PRICED_PRODUCT_SELECT,
+        })
+        const pricing = priceConsumption(locked, line.sasia)
+        await applyConsumption(tx, line.productId, line.sasia)
+
+        const lineTotal = pricing.cmimiBlerjes * line.sasia
+        totali += lineTotal
+
+        itemData.push({
+          productId: line.productId,
+          emriProduktit: line.emri,
+          sasia: line.sasia,
+          njesia: line.njesia,
           cmimiBlerjes: pricing.cmimiBlerjes,
-          totali: pricing.cmimiBlerjes * qty.value,
+          totali: lineTotal,
+        })
+      }
+
+      return tx.personalUseEntry.create({
+        data: {
           data: dataPerdorimit,
           userId: userId ?? '',
-          userEmail: typeof body?.userEmail === 'string' ? body.userEmail : '',
+          userEmail,
           shenime:
-            typeof body?.shenime === 'string' && body.shenime.trim()
-              ? body.shenime.trim()
-              : null,
+            typeof shenime === 'string' && shenime.trim() ? shenime.trim() : null,
+          totali,
+          items: { create: itemData },
         },
+        include: { items: true },
       })
     })
 

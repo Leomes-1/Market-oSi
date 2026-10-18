@@ -3,6 +3,13 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, parseId, success } from '@/lib/api'
 
+/**
+ * Deletes a whole personal-use registration and puts every line's stock back.
+ *
+ * The lines go with it through the FK's ON DELETE CASCADE, but stock has to be
+ * returned explicitly first — the cascade only removes rows, it knows nothing
+ * about the stock those rows took out.
+ */
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -15,15 +22,21 @@ export async function DELETE(
     if (id === null) return badRequest('ID i pavlefshëm')
 
     await prisma.$transaction(async (tx) => {
-      const entry = await tx.personalUse.findUnique({ where: { id } })
+      const entry = await tx.personalUseEntry.findUnique({
+        where: { id },
+        include: { items: true },
+      })
       if (!entry) throw new ApiFailure('Regjistrimi nuk u gjet', 404, 'NOT_FOUND')
 
-      // Deleting an entry puts the stock back.
-      await tx.product.update({
-        where: { id: entry.productId },
-        data: { sasia: { increment: entry.sasia } },
-      })
-      await tx.personalUse.delete({ where: { id } })
+      for (const item of entry.items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { sasia: { increment: item.sasia } },
+        })
+      }
+
+      // Cascade removes the lines.
+      await tx.personalUseEntry.delete({ where: { id } })
     })
 
     return success()

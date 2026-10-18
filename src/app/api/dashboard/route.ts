@@ -114,12 +114,12 @@ export async function GET(request: NextRequest) {
       }),
       // Personal use is a cost, never revenue: it is aggregated on its own and
       // deliberately kept out of every total, profit and chart above.
-      prisma.personalUse.aggregate({
+      prisma.personalUseEntry.aggregate({
         _sum: { totali: true },
         _count: true,
         where: { data: { gte: periodStart, lt: periodEnd } },
       }),
-      prisma.personalUse.aggregate({
+      prisma.personalUseEntry.aggregate({
         _sum: { totali: true },
         where: { data: { gte: monthStart, lt: tomorrowStart } },
       }),
