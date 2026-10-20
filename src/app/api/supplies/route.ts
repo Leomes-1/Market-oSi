@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
 import { planPriceUpdate, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const SUPPLY_INCLUDE = {
   furnitor: { select: { id: true, emri: true } },
@@ -166,6 +167,7 @@ export async function POST(req: NextRequest) {
       return newSupply
     })
 
+    scheduleSnapshot()
     return NextResponse.json(supply, { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Supplies POST')

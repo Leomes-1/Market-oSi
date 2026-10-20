@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { mergeByProductId, validateQuantity } from '@/lib/validation'
 import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export const dynamic = 'force-dynamic'
 
@@ -209,6 +210,7 @@ export async function POST(req: NextRequest) {
       })
     })
 
+    scheduleSnapshot()
     return NextResponse.json(entry, { status: 201 })
   } catch (err) {
     return handleApiError(err, `PersonalUse POST (role ${role})`)

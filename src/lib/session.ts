@@ -2,6 +2,7 @@ import { cache } from 'react'
 import { createClient } from './supabase/server'
 import { prisma } from './prisma'
 import { Role } from './roles'
+import { scheduleSnapshot } from './backups/snapshot'
 
 /**
  * Per-request session resolution, deduplicated with React's `cache()`.
@@ -60,6 +61,7 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
         roli: count === 0 ? 'admin' : 'staff',
       },
     })
+    scheduleSnapshot()
     return { userId: user.id, email: created.email, role: created.roli as Role }
   } catch (error) {
     // Next throws a DynamicServerError while probing whether a route can be

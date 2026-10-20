@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { badRequest, conflict, handleApiError, notFound, parseId } from '@/lib/api'
 import { Role } from '@/lib/roles'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const VALID_ROLES: Role[] = ['admin', 'cashier', 'staff']
 
@@ -43,6 +44,7 @@ export async function PUT(
       data: { roli },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(userRole)
   } catch (error) {
     return handleApiError(error, 'User PUT')

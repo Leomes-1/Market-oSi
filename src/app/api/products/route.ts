@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
 
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
       include: { furnitor: true, barcodes: true },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(product, { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Products POST', BARCODE_DUPLICATE)

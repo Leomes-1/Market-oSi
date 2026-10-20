@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
 
@@ -126,6 +127,7 @@ export async function PUT(
       include: { furnitor: true, barcodes: true },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(product)
   } catch (error) {
     return handleApiError(error, 'Product PUT', BARCODE_DUPLICATE)
@@ -144,6 +146,7 @@ export async function DELETE(
     if (id === null) return badRequest('ID i pavlefshëm')
 
     await prisma.product.delete({ where: { id } })
+    scheduleSnapshot()
     return success()
   } catch (error) {
     // A product that appears on any sale or supply is protected by an

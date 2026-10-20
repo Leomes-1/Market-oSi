@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, parseId, success } from '@/lib/api'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 /**
  * Deletes a whole personal-use registration and puts every line's stock back.
@@ -39,6 +40,7 @@ export async function DELETE(
       await tx.personalUseEntry.delete({ where: { id } })
     })
 
+    scheduleSnapshot()
     return success()
   } catch (error) {
     return handleApiError(error, 'PersonalUse DELETE')

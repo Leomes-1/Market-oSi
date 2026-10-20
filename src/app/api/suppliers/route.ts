@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError } from '@/lib/api'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function GET() {
   // Staff manage suppliers from /furnitoret, and the products, supplies and
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
       include: { products: { select: { id: true, emri: true } } },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(supplier, { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Suppliers POST')

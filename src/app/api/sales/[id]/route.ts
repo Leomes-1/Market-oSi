@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
 import { mergeByProductId, validateQuantity } from '@/lib/validation'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function PUT(
   req: NextRequest,
@@ -147,6 +148,7 @@ export async function PUT(
       include: { items: { include: { product: true } } },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(updatedSale)
   } catch (error) {
     return handleApiError(error, 'Sale PUT')
@@ -180,6 +182,7 @@ export async function DELETE(
       await tx.sale.delete({ where: { id: saleId } })
     })
 
+    scheduleSnapshot()
     return success()
   } catch (error) {
     return handleApiError(error, 'Sale DELETE')

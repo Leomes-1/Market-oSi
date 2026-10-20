@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError, parseId, success } from '@/lib/api'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function PUT(
   req: NextRequest,
@@ -33,6 +34,7 @@ export async function PUT(
       include: { products: { select: { id: true, emri: true } } },
     })
 
+    scheduleSnapshot()
     return NextResponse.json(supplier)
   } catch (error) {
     return handleApiError(error, 'Supplier PUT')
@@ -51,6 +53,7 @@ export async function DELETE(
     if (id === null) return badRequest('ID i pavlefshëm')
 
     await prisma.supplier.delete({ where: { id } })
+    scheduleSnapshot()
     return success()
   } catch (error) {
     return handleApiError(error, 'Supplier DELETE')

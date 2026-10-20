@@ -11,6 +11,7 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/furnitoret': ['admin', 'staff'],
   '/perdorim-vetjak': ['admin'],
   '/perdoruesit': ['admin'],
+  '/backup': ['admin'],
 }
 
 export const ROLE_LABELS: Record<Role, string> = {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function GET(
   _req: NextRequest,
@@ -76,6 +77,7 @@ export async function DELETE(
       await tx.supply.delete({ where: { id } })
     })
 
+    scheduleSnapshot()
     return success()
   } catch (error) {
     return handleApiError(error, 'Supply DELETE')

@@ -5,6 +5,7 @@ import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { mergeByProductId, validateQuantity } from '@/lib/validation'
 import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { stripProfitFromSales } from '@/lib/sale-visibility'
+import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function GET(req: NextRequest) {
   const { role, error } = await requireRole(['admin', 'cashier'])
@@ -181,6 +182,7 @@ export async function POST(req: NextRequest) {
       })
     })
 
+    scheduleSnapshot()
     return NextResponse.json(sale, { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Sales POST')
