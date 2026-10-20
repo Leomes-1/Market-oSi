@@ -255,6 +255,7 @@ export default function ProduktetPage() {
             value={kerkimi}
             onChange={setKerkimi}
             placeholder="Kërko produkt, barkod..."
+            selectOnScan
           />
           <div className="relative sm:w-52">
             <RiFilterLine className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />

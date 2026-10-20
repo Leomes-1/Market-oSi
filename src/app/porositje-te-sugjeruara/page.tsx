@@ -268,6 +268,7 @@ export default function PorositjeTeSugjeruaraPage() {
             value={kerkimi}
             onChange={setKerkimi}
             placeholder="Filtro produktet..."
+            selectOnScan
           />
           <input
             type="date"

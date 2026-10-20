@@ -25,6 +25,12 @@ interface SearchInputProps {
   icon?: React.ReactNode
   /** Transient scan feedback. Colours the border/background; × stays usable. */
   tone?: 'neutral' | 'success' | 'error'
+  /**
+   * Scan-replace: select the whole value on focus and after Enter, so the next
+   * scan overwrites it instead of appending. For fields that keep their value
+   * after a scan; fields that clear themselves don't need it.
+   */
+  selectOnScan?: boolean
   'aria-label'?: string
   id?: string
 }
@@ -48,6 +54,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
     inputClassName,
     icon,
     tone = 'neutral',
+    selectOnScan,
     'aria-label': ariaLabel,
     id,
   },
@@ -80,6 +87,17 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
       e.preventDefault()
       const trimmed = value.trim()
       if (trimmed && onSubmit) onSubmit(trimmed)
+      if (selectOnScan) inputRef.current?.select()
+    }
+  }
+
+  function handleMouseDown(e: React.MouseEvent<HTMLInputElement>) {
+    // A click would place the caret after onFocus selected everything, so take
+    // the focusing click over. Clicks on an already-focused field behave
+    // normally, which keeps manual editing possible.
+    if (selectOnScan && document.activeElement !== inputRef.current) {
+      e.preventDefault()
+      inputRef.current?.focus()
     }
   }
 
@@ -110,6 +128,8 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
+        onFocus={selectOnScan ? (e) => e.currentTarget.select() : undefined}
+        onMouseDown={handleMouseDown}
         placeholder={placeholder}
         disabled={disabled}
         autoFocus={autoFocus}

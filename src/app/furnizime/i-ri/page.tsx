@@ -271,6 +271,7 @@ export default function FurnizimIRiPage() {
               onChange={setSupplierSearch}
               autoFocus
               placeholder="Kërko furnitor..."
+              selectOnScan
             />
 
             {loading ? (
