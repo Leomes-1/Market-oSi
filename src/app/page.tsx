@@ -18,7 +18,7 @@ import {
   RiBox3Line,
   RiTruckLine,
   RiHomeHeartLine,
-  RiCalendarLine,
+  RiCoinsLine,
   RiCheckLine,
   RiInformationLine,
   RiErrorWarningLine,
@@ -94,6 +94,13 @@ const PERIOD_LABELS: Record<Periudha, string> = {
   jave: 'Kjo Javë',
   muaj: 'Ky Muaj',
   custom: 'Periudhë Tjatër',
+}
+
+const PROFIT_LABELS: Record<Periudha, string> = {
+  sot: 'Fitimi Sot',
+  jave: 'Fitimi i Javës',
+  muaj: 'Fitimi i Muajit',
+  custom: 'Fitimi i Periudhës',
 }
 
 const fadeUp = {
@@ -283,13 +290,23 @@ export default function Dashboard() {
           icon={<RiMoneyDollarCircleLine />}
           color="blue"
         />
+        {/* Profit for the same period as the card beside it. Sale.fitimi
+            already includes kg lines (amount − weight × cost). */}
         <KpiCard
           index={1}
-          title="Shitjet Sot"
-          value={formatCurrency(data?.shitjetSotTotali ?? 0)}
-          sub="të ardhura ditore"
-          icon={<RiCalendarLine />}
+          title={PROFIT_LABELS[periudha]}
+          value={formatCurrency(data?.periudhaFitimi ?? 0)}
+          sub={`nga ${formatCurrency(data?.periudhaTotali ?? 0)} shitje`}
+          icon={<RiCoinsLine />}
           color="indigo"
+          trend={
+            data && data.periudhaTotali > 0
+              ? {
+                  value: `${formatPercent(marginPercent(data.periudhaFitimi, data.periudhaTotali))} marzh`,
+                  positive: data.periudhaFitimi >= 0,
+                }
+              : undefined
+          }
         />
         <KpiCard
           index={2}
