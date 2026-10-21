@@ -40,9 +40,11 @@ interface SearchInputProps {
   /** Transient scan feedback. Colours the border/background; × stays usable. */
   tone?: 'neutral' | 'success' | 'error'
   /**
-   * Scan-replace: select the whole value on focus and after Enter, so the next
-   * scan overwrites it instead of appending. For fields that keep their value
-   * after a scan; fields that clear themselves don't need it.
+   * Scan-replace: after Enter the value stays visible (not selected), and the
+   * first character typed or pasted after it replaces the whole value instead
+   * of appending, so the next scan starts clean. Clicking the field or moving
+   * the caret cancels that and edits normally. For fields that keep their
+   * value after a scan; fields that clear themselves don't need it.
    */
   selectOnScan?: boolean
   'aria-label'?: string
@@ -76,6 +78,8 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
 ) {
   const inputRef = useRef<HTMLInputElement>(null)
   const isBarcode = variant === 'barcode'
+  // Set by Enter on a selectOnScan field: the next character replaces the value.
+  const replaceNext = useRef(false)
 
   useEffect(() => {
     if (!autoFocus) return
@@ -87,12 +91,14 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
     clear: () => {
+      replaceNext.current = false
       onChange('')
       inputRef.current?.focus()
     },
   }))
 
   function clear() {
+    replaceNext.current = false
     onChange('')
     inputRef.current?.focus()
   }
@@ -108,18 +114,28 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
       e.preventDefault()
       const trimmed = value.trim()
       if (trimmed && onSubmit) onSubmit(trimmed)
-      if (selectOnScan) inputRef.current?.select()
+      if (selectOnScan) replaceNext.current = true
+      return
+    }
+    if (!replaceNext.current) return
+
+    const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
+    if (printable) {
+      // First character after a scan: start the value over with it.
+      e.preventDefault()
+      replaceNext.current = false
+      onChange(e.key)
+    } else if (!['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab'].includes(e.key)) {
+      // Backspace, arrows, Home/End… mean the operator is editing by hand.
+      replaceNext.current = false
     }
   }
 
-  function handleMouseDown(e: React.MouseEvent<HTMLInputElement>) {
-    // A click would place the caret after onFocus selected everything, so take
-    // the focusing click over. Clicks on an already-focused field behave
-    // normally, which keeps manual editing possible.
-    if (selectOnScan && document.activeElement !== inputRef.current) {
-      e.preventDefault()
-      inputRef.current?.focus()
-    }
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    if (!replaceNext.current) return
+    e.preventDefault()
+    replaceNext.current = false
+    onChange(e.clipboardData.getData('text'))
   }
 
   const toneInput =
@@ -149,8 +165,9 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        onFocus={selectOnScan ? (e) => e.currentTarget.select() : undefined}
-        onMouseDown={handleMouseDown}
+        onPaste={handlePaste}
+        // A click means the operator wants to edit what is there.
+        onMouseDown={() => { replaceNext.current = false }}
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="off"
