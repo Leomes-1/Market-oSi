@@ -9,7 +9,7 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/porositje-te-sugjeruara': ['admin', 'staff'],
   '/furnizime': ['admin', 'staff'],
   '/furnitoret': ['admin', 'staff'],
-  '/perdorim-vetjak': ['admin'],
+  '/perdorim-vetjak': ['admin', 'cashier'],
   '/perdoruesit': ['admin'],
   '/backup': ['admin'],
 }

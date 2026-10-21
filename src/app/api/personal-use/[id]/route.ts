@@ -16,7 +16,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { error } = await requireRole(['admin'])
+  const { error } = await requireRole(['admin', 'cashier'])
   if (error) return error
 
   try {

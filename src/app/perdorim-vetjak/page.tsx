@@ -134,6 +134,28 @@ export default function PerdorimVetjakPage() {
     fetchEntries()
   }, [fetchEntries])
 
+  // The catalogue withholds cost from cashiers, but personal use shows it to
+  // them, so the preview reads costs from their own endpoint instead.
+  const [costs, setCosts] = useState<Record<number, number>>({})
+  const fetchCosts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/personal-use/costs')
+      if (res.ok) setCosts(await res.json())
+    } catch {
+      // Preview falls back to the catalogue's cost, if it has one.
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchCosts()
+  }, [fetchCosts])
+
+  // Read at render, so a line added before the costs arrived still updates.
+  const lineCost = useCallback(
+    (l: CartLine) => costs[l.productId] ?? l.cmimiBlerjes,
+    [costs]
+  )
+
   const suggestions = useMemo(() => {
     if (!kerkimi.trim()) return []
     return search(kerkimi).slice(0, 8)
@@ -209,8 +231,8 @@ export default function PerdorimVetjakPage() {
   }
 
   const kostoTotale = useMemo(
-    () => lines.reduce((s, l) => s + l.cmimiBlerjes * (l.sasia > 0 ? l.sasia : 0), 0),
-    [lines]
+    () => lines.reduce((s, l) => s + lineCost(l) * (l.sasia > 0 ? l.sasia : 0), 0),
+    [lines, lineCost]
   )
 
   async function save() {
@@ -239,7 +261,7 @@ export default function PerdorimVetjakPage() {
       toast.success(`U regjistrua — ${valid.length} produkte`)
       setLines([])
       setShenime('')
-      await Promise.all([fetchEntries(), refreshCatalog()])
+      await Promise.all([fetchEntries(), refreshCatalog(), fetchCosts()])
       searchRef.current?.focus()
     } catch {
       toast.error('Gabim gjatë ruajtjes')
@@ -277,7 +299,7 @@ export default function PerdorimVetjakPage() {
     })
   }
 
-  if (!role || role !== 'admin') return <AccessDenied />
+  if (!role || !['admin', 'cashier'].includes(role)) return <AccessDenied />
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -375,7 +397,7 @@ export default function PerdorimVetjakPage() {
                       </td>
                       <td className="table-td text-right font-medium text-slate-800 tabular-nums">
                         {line.sasia > 0 ? (
-                          formatCurrency(line.cmimiBlerjes * line.sasia)
+                          formatCurrency(lineCost(line) * line.sasia)
                         ) : (
                           <span className="text-slate-300">—</span>
                         )}

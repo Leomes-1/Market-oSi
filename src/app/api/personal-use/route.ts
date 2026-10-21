@@ -23,7 +23,7 @@ interface IncomingItem {
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(['admin'])
+  const { error } = await requireRole(['admin', 'cashier'])
   if (error) return error
 
   try {
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { userId, role, error } = await requireRole(['admin'])
+  const { userId, role, error } = await requireRole(['admin', 'cashier'])
   if (error) return error
 
   try {

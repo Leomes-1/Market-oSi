@@ -33,7 +33,7 @@ const navItems = [
   { href: '/porositje-te-sugjeruara', label: 'Porositje Sugjeruara', icon: RiFileListLine, allowed: ['admin', 'staff'] as Role[] },
   { href: '/furnizime', label: 'Furnizime', icon: RiBox3Line, allowed: ['admin', 'staff'] as Role[] },
   { href: '/furnitoret', label: 'Furnitorët', icon: RiTruckLine, allowed: ['admin', 'staff'] as Role[] },
-  { href: '/perdorim-vetjak', label: 'Përdorim Vetjak', icon: RiHomeHeartLine, allowed: ['admin'] as Role[] },
+  { href: '/perdorim-vetjak', label: 'Përdorim Vetjak', icon: RiHomeHeartLine, allowed: ['admin', 'cashier'] as Role[] },
   { href: '/perdoruesit', label: 'Përdoruesit', icon: RiTeamLine, allowed: ['admin'] as Role[] },
   { href: '/backup', label: 'Backup & Rikthim', icon: RiDatabase2Line, allowed: ['admin'] as Role[] },
 ]
