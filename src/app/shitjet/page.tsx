@@ -112,6 +112,25 @@ export default function ShitjetPage() {
   const barcodeRef = useRef<SearchInputHandle>(null)
   const amountRefs = useRef<Map<number, HTMLInputElement>>(new Map())
   const contentRef = useRef<HTMLDivElement>(null)
+  const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+  // The line just scanned or added; `n` changes on every add so scanning the
+  // same product twice re-triggers the scroll and the flash.
+  const [lastAdded, setLastAdded] = useState<{ id: number; n: number } | null>(null)
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+
+  function markAdded(productId: number) {
+    setLastAdded((prev) => ({ id: productId, n: (prev?.n ?? 0) + 1 }))
+  }
+
+  // Bring the last added line into view and flash it briefly, so with a long
+  // cart the latest scan is always visible.
+  useEffect(() => {
+    if (!lastAdded) return
+    lineRefs.current.get(lastAdded.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    setHighlightId(lastAdded.id)
+    const t = setTimeout(() => setHighlightId(null), 1200)
+    return () => clearTimeout(t)
+  }, [lastAdded])
   // Null until the cashier drags the edge: the responsive default applies.
   const [cartWidth, setCartWidth] = useState<number | null>(null)
 
@@ -288,6 +307,7 @@ export default function ShitjetPage() {
       return next
     })
 
+    markAdded(product.id)
     triggerFlash('success', `${product.emri} u shtua`, 900)
     barcodeRef.current?.focus()
   }
@@ -302,6 +322,7 @@ export default function ShitjetPage() {
         ? prev
         : [...prev, { product, sasia: 0, shuma: null }]
     )
+    markAdded(product.id)
     setKerkimi('')
     // After the line has rendered, so its input exists.
     setTimeout(() => {
@@ -321,14 +342,18 @@ export default function ShitjetPage() {
       return
     }
     const step = isWeighted(product.njesia) ? 0.250 : 1
+    // Checked against the rendered cart so a refusal doesn't highlight a line.
+    const inCart = cart.find((i) => i.product.id === product.id)
+    if (inCart && parseFloat((inCart.sasia + step).toFixed(3)) > product.sasia) {
+      toast.error(`Stoku i pamjaftueshëm: ${product.sasia} ${product.njesia}`)
+      barcodeRef.current?.focus()
+      return
+    }
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === product.id)
       if (existing) {
         const newSasia = parseFloat((existing.sasia + step).toFixed(3))
-        if (newSasia > product.sasia) {
-          toast.error(`Stoku i pamjaftueshëm: ${product.sasia} ${product.njesia}`)
-          return prev
-        }
+        if (newSasia > product.sasia) return prev
         return prev.map((i) =>
           i.product.id === product.id ? { ...i, sasia: newSasia } : i
         )
@@ -343,6 +368,7 @@ export default function ShitjetPage() {
       delete next[product.id]
       return next
     })
+    markAdded(product.id)
     setKerkimi('')
     barcodeRef.current?.focus()
   }
@@ -765,11 +791,17 @@ export default function ShitjetPage() {
                   {cart.map((item) => (
                     <motion.div
                       key={item.product.id}
+                      ref={(el: HTMLDivElement | null) => {
+                        if (el) lineRefs.current.set(item.product.id, el)
+                        else lineRefs.current.delete(item.product.id)
+                      }}
                       initial={{ opacity: 0, x: 20 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -20 }}
                       transition={{ duration: 0.15 }}
-                      className="px-4 py-3 sm:px-4"
+                      className={`px-4 py-3 sm:px-4 scroll-my-2 transition-colors duration-500 ${
+                        highlightId === item.product.id ? 'bg-blue-100' : 'bg-white'
+                      }`}
                     >
                       <div className="flex items-start justify-between mb-2">
                         <p className="text-sm font-medium text-slate-800 leading-tight flex-1 pr-2">
