@@ -10,6 +10,7 @@ import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatPercent, isLowStock, marginPercent, toArray } from '@/lib/utils'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
+import { tracksStock } from '@/lib/validation'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import { rowDelay } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
@@ -226,7 +227,7 @@ export default function ProduktetPage() {
     )
   }
 
-  const lowStockCount = safeProducts.filter((p) => isLowStock(p.sasia, p.stokuMinimal)).length
+  const lowStockCount = safeProducts.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia)).length
 
   if (!role || !['admin', 'staff'].includes(role)) return <AccessDenied />
 
@@ -301,7 +302,7 @@ export default function ProduktetPage() {
               </thead>
               <tbody>
                 {safeProducts.map((product, idx) => {
-                  const lowStock = isLowStock(product.sasia, product.stokuMinimal)
+                  const lowStock = isLowStock(product.sasia, product.stokuMinimal, product.njesia)
                   return (
                     <motion.tr
                       key={product.id}
@@ -333,9 +334,13 @@ export default function ProduktetPage() {
                         <span className="badge-gray">{product.kategoria}</span>
                       </td>
                       <td className="table-td text-center">
-                        <span className={lowStock ? 'badge-red' : 'badge-green'}>
-                          {product.sasia} {product.njesia}
-                        </span>
+                        {tracksStock(product.njesia) ? (
+                          <span className={lowStock ? 'badge-red' : 'badge-green'}>
+                            {product.sasia} {product.njesia}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
                         {lowStock && (
                           <p className="text-xs text-red-400 mt-0.5">Min: {product.stokuMinimal}</p>
                         )}
@@ -516,28 +521,36 @@ export default function ProduktetPage() {
               readOnly={!isAdmin}
             />
           </div>
-          <div>
-            <label className="label">Sasia në Stok</label>
-            <input
-              type="number"
-              value={form.sasia}
-              onChange={(e) => setForm({ ...form, sasia: e.target.value })}
-              className="input"
-              min="0"
-              step={form.njesia === 'kg' || form.njesia === 'gram' ? '0.001' : '1'}
-            />
-          </div>
-          <div>
-            <label className="label">Stoku Minimal</label>
-            <input
-              type="number"
-              value={form.stokuMinimal}
-              onChange={(e) => setForm({ ...form, stokuMinimal: e.target.value })}
-              className="input"
-              min="0"
-              step={form.njesia === 'kg' || form.njesia === 'gram' ? '0.001' : '1'}
-            />
-          </div>
+          {tracksStock(form.njesia) ? (
+            <>
+              <div>
+                <label className="label">Sasia në Stok</label>
+                <input
+                  type="number"
+                  value={form.sasia}
+                  onChange={(e) => setForm({ ...form, sasia: e.target.value })}
+                  className="input"
+                  min="0"
+                  step={form.njesia === 'kg' || form.njesia === 'gram' ? '0.001' : '1'}
+                />
+              </div>
+              <div>
+                <label className="label">Stoku Minimal</label>
+                <input
+                  type="number"
+                  value={form.stokuMinimal}
+                  onChange={(e) => setForm({ ...form, stokuMinimal: e.target.value })}
+                  className="input"
+                  min="0"
+                  step={form.njesia === 'kg' || form.njesia === 'gram' ? '0.001' : '1'}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="sm:col-span-2 text-xs text-slate-500">
+              Stoku nuk ndiqet për produktet me njësi {form.njesia}.
+            </p>
+          )}
           <div className="sm:col-span-2">
             <label className="label">Furnitori</label>
             <select

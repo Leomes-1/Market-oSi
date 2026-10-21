@@ -1,3 +1,5 @@
+import { tracksStock } from './validation'
+
 export function formatCurrency(amount: number): string {
   return `${amount.toFixed(0)} L`
 }
@@ -30,7 +32,9 @@ export function formatTime(date: string | Date): string {
   })
 }
 
-export function isLowStock(sasia: number, stokuMinimal: number): boolean {
+/** Products whose stock is not tracked (see `tracksStock`) are never low. */
+export function isLowStock(sasia: number, stokuMinimal: number, njesia?: string): boolean {
+  if (!tracksStock(njesia)) return false
   return sasia <= stokuMinimal
 }
 

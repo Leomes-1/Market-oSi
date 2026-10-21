@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
-import { mergeByProductId, validateQuantity } from '@/lib/validation'
+import { mergeByProductId, tracksStock, validateQuantity } from '@/lib/validation'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function PUT(
@@ -41,7 +41,7 @@ export async function PUT(
     await prisma.$transaction(async (tx) => {
       const existingSale = await tx.sale.findUnique({
         where: { id: saleId },
-        include: { items: true },
+        include: { items: { include: { product: { select: { njesia: true } } } } },
       })
       if (!existingSale) {
         throw new ApiFailure('Fatura nuk u gjet', 404, 'NOT_FOUND')
@@ -60,7 +60,9 @@ export async function PUT(
 
       // Put the original quantities back before re-applying the new ones, so
       // availability is measured against stock as it was before this invoice.
+      // Untracked (kg) products have no stock to put back.
       for (const original of existingSale.items) {
+        if (!tracksStock(original.product.njesia)) continue
         await tx.product.update({
           where: { id: original.productId },
           data: { sasia: { increment: original.sasia } },
@@ -82,6 +84,7 @@ export async function PUT(
         cmimiShitjes: number
         fitimi: number
       }> = []
+      const untracked = new Set<number>()
 
       for (const line of lines) {
         const product = byId.get(line.productId)
@@ -93,6 +96,7 @@ export async function PUT(
         if (!qty.ok) {
           throw new ApiFailure(qty.error, 400, 'VALIDATION')
         }
+        if (!tracksStock(product.njesia)) untracked.add(product.id)
 
         // A line already on this invoice keeps its historical prices. A line
         // the admin has just added has no history, so it is priced at today's
@@ -119,6 +123,7 @@ export async function PUT(
 
       // Same atomic guard as the create path: stock cannot go below zero.
       for (const item of itemData) {
+        if (untracked.has(item.productId)) continue
         const updated = await tx.product.updateMany({
           where: { id: item.productId, sasia: { gte: item.sasia } },
           data: { sasia: { decrement: item.sasia } },
@@ -168,12 +173,13 @@ export async function DELETE(
 
     const sale = await prisma.sale.findUnique({
       where: { id: saleId },
-      include: { items: true },
+      include: { items: { include: { product: { select: { njesia: true } } } } },
     })
     if (!sale) return notFound('Fatura nuk u gjet')
 
     await prisma.$transaction(async (tx) => {
       for (const item of sale.items) {
+        if (!tracksStock(item.product.njesia)) continue
         await tx.product.update({
           where: { id: item.productId },
           data: { sasia: { increment: item.sasia } },

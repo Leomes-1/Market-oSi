@@ -13,7 +13,7 @@ import Modal from '@/components/ui/Modal'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { rowDelay } from '@/lib/animation'
-import { isWeightedUnit } from '@/lib/validation'
+import { isWeightedUnit, tracksStock } from '@/lib/validation'
 import {
   RiHomeHeartLine,
   RiDeleteBin6Line,
@@ -309,7 +309,7 @@ export default function PerdorimVetjakPage() {
                   >
                     <span className="truncate text-slate-800">{p.emri}</span>
                     <span className="text-xs text-slate-400 whitespace-nowrap">
-                      {p.sasia} {p.njesia}
+                      {tracksStock(p.njesia) ? `${p.sasia} ${p.njesia}` : p.njesia}
                     </span>
                   </button>
                 ))}
@@ -341,7 +341,8 @@ export default function PerdorimVetjakPage() {
                 {lines.map((line, index) => {
                   const live = products.find((p) => p.id === line.productId)
                   const stoku = live ? live.sasia : line.sasiaAktuale
-                  const mbingarkese = line.sasia > stoku
+                  const tracked = tracksStock(line.njesia)
+                  const mbingarkese = tracked && line.sasia > stoku
                   return (
                     <tr key={line.productId} className="border-b border-slate-100">
                       <td className="table-td">
@@ -349,7 +350,11 @@ export default function PerdorimVetjakPage() {
                         <span className="text-slate-400 text-xs ml-1.5">{line.njesia}</span>
                       </td>
                       <td className="table-td text-center">
-                        <span className={mbingarkese ? 'badge-red' : 'badge-gray'}>{stoku}</span>
+                        {tracked ? (
+                          <span className={mbingarkese ? 'badge-red' : 'badge-gray'}>{stoku}</span>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
                       </td>
                       <td className="table-td">
                         <input

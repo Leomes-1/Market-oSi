@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
+import { isLowStock } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
       }),
     ])
 
-    const stokUlet = produktet.filter((p) => p.sasia <= p.stokuMinimal)
+    const stokUlet = produktet.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
     const totali = shitjet.reduce((s, x) => s + x.totali, 0)
     const fitimi = shitjet.reduce((s, x) => s + x.fitimi, 0)
 

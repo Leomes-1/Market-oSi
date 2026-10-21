@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
-import { validatePrice, validateQuantity } from '@/lib/validation'
+import { tracksStock, validatePrice, validateQuantity } from '@/lib/validation'
 import { planPriceUpdate, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
@@ -148,17 +148,25 @@ export async function POST(req: NextRequest) {
           select: PRICED_PRODUCT_SELECT,
         })
 
+        // Untracked (kg) products record the delivery but keep no stock count.
+        const tracked = tracksStock(item.njesia)
         const priceData = item.updatePrice
-          ? planPriceUpdate(before, {
-              cmimiBlerjes: item.cmimiBlerjes,
-              ...(item.cmimiShitjes !== null ? { cmimiShitjes: item.cmimiShitjes } : {}),
-            })
+          ? planPriceUpdate(
+              before,
+              {
+                cmimiBlerjes: item.cmimiBlerjes,
+                ...(item.cmimiShitjes !== null ? { cmimiShitjes: item.cmimiShitjes } : {}),
+              },
+              tracked
+            )
           : {}
+
+        if (!tracked && Object.keys(priceData).length === 0) continue
 
         await tx.product.update({
           where: { id: item.productId },
           data: {
-            sasia: { increment: item.sasia },
+            ...(tracked ? { sasia: { increment: item.sasia } } : {}),
             ...priceData,
           },
         })

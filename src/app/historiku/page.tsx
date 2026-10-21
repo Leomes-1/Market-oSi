@@ -11,6 +11,7 @@ import ExportButtons from '@/components/ui/ExportButtons'
 import SearchInput from '@/components/ui/SearchInput'
 import { formatCurrency, formatDateTime, formatPercent, marginPercent, toArray } from '@/lib/utils'
 import { rowDelay } from '@/lib/animation'
+import { tracksStock } from '@/lib/validation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -144,7 +145,10 @@ export default function HistorikuPage() {
         cmimiBlerjes: item.cmimiBlerjes,
         cmimiShitjes: item.cmimiShitjes,
         njesia: item.product?.njesia || 'copë',
-        availableStock: (item.product?.sasia ?? 0) + item.sasia,
+        // Untracked (kg) products have no stock limit.
+        availableStock: tracksStock(item.product?.njesia)
+          ? (item.product?.sasia ?? 0) + item.sasia
+          : Infinity,
       }))
     )
     setAddProductSearch('')
@@ -177,7 +181,8 @@ export default function HistorikuPage() {
   }
 
   const addProductToEdit = (product: Product) => {
-    if (product.sasia <= 0) {
+    const tracked = tracksStock(product.njesia)
+    if (tracked && product.sasia <= 0) {
       toast.error(`${product.emri} — Stoku i mbaruar`)
       return
     }
@@ -195,7 +200,7 @@ export default function HistorikuPage() {
           cmimiBlerjes: product.cmimiBlerjes,
           cmimiShitjes: product.cmimiShitjes,
           njesia: product.njesia,
-          availableStock: product.sasia,
+          availableStock: tracked ? product.sasia : Infinity,
         },
       ]
     })
@@ -560,7 +565,8 @@ export default function HistorikuPage() {
                           {item.emriProduktit}
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">
-                          {formatCurrency(item.cmimiShitjes)} / {item.njesia} &middot; Stok disponibël: {item.availableStock}
+                          {formatCurrency(item.cmimiShitjes)} / {item.njesia}
+                          {Number.isFinite(item.availableStock) && <> &middot; Stok disponibël: {item.availableStock}</>}
                         </p>
                       </div>
 
@@ -673,7 +679,8 @@ export default function HistorikuPage() {
                             <div>
                               <p className="text-sm font-medium text-slate-900">{p.emri}</p>
                               <p className="text-xs text-slate-400">
-                                {p.kategoria} &middot; Stok: {p.sasia} {p.njesia}
+                                {p.kategoria} &middot;{' '}
+                                {tracksStock(p.njesia) ? `Stok: ${p.sasia} ${p.njesia}` : p.njesia}
                               </p>
                             </div>
                             <span className="text-sm font-semibold text-blue-600 ml-4">

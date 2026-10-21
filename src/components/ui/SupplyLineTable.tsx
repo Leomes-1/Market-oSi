@@ -3,7 +3,7 @@
 import { useCallback, useRef } from 'react'
 import { RiDeleteBin6Line } from 'react-icons/ri'
 import { formatCurrency } from '@/lib/utils'
-import { isWeightedUnit } from '@/lib/validation'
+import { isWeightedUnit, tracksStock } from '@/lib/validation'
 
 export interface SupplyLine {
   productId: number
@@ -132,7 +132,11 @@ export default function SupplyLineTable({
                 </td>
 
                 <td className="table-td text-center">
-                  <span className={low ? 'badge-red' : 'badge-gray'}>{line.sasiaAktuale}</span>
+                  {tracksStock(line.njesia) ? (
+                    <span className={low ? 'badge-red' : 'badge-gray'}>{line.sasiaAktuale}</span>
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
                 </td>
 
                 {showSuggestion && (

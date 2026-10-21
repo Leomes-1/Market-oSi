@@ -1,5 +1,7 @@
 // Client-side only — all heavy imports are dynamic to prevent SSR bundling
 
+import { tracksStock } from './validation'
+
 export interface ExportData {
   periudhaLabel: string
   nga?: string | null
@@ -308,7 +310,7 @@ export async function exportExcel(data: ExportData): Promise<void> {
     ...data.produktet.map((p) => [
       p.emri,
       p.kategoria,
-      p.sasia,
+      tracksStock(p.njesia) ? p.sasia : '—',
       p.stokuMinimal,
       p.cmimiBlerjes,
       p.cmimiShitjes,

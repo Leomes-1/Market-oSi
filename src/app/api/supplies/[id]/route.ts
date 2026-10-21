@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
+import { tracksStock } from '@/lib/validation'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function GET(
@@ -47,7 +48,7 @@ export async function DELETE(
     await prisma.$transaction(async (tx) => {
       const supply = await tx.supply.findUnique({
         where: { id },
-        include: { items: true },
+        include: { items: { include: { product: { select: { njesia: true } } } } },
       })
 
       if (!supply) {
@@ -58,7 +59,9 @@ export async function DELETE(
       // The conditional guard refuses rather than driving stock negative — the
       // operator is told which product blocks it and can correct the count
       // first. This is how negative stock got into the data before.
+      // Untracked (kg) products never received stock, so there is none to take.
       for (const item of supply.items) {
+        if (!tracksStock(item.product.njesia)) continue
         const updated = await tx.product.updateMany({
           where: { id: item.productId, sasia: { gte: item.sasia } },
           data: { sasia: { decrement: item.sasia } },

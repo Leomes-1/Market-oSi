@@ -15,6 +15,34 @@ export function isWeightedUnit(njesia: string | null | undefined): boolean {
   return (WEIGHTED_UNITS as readonly string[]).includes(njesia)
 }
 
+/**
+ * Units sold loose by the amount, whose stock the shop does not count.
+ *
+ * Sales, supplies and personal use never check or change `sasia` for these,
+ * the stock column shows "—", and they are left out of every low-stock and
+ * reorder list. At the till the cashier types the price, not the weight — see
+ * `weightForAmount`. Only "kg" for now; add a unit here to opt it in.
+ */
+export const UNTRACKED_STOCK_UNITS = ['kg'] as const
+
+export function tracksStock(njesia: string | null | undefined): boolean {
+  if (!njesia) return true
+  return !(UNTRACKED_STOCK_UNITS as readonly string[]).includes(njesia)
+}
+
+/**
+ * Weight for an amount of money at a price per unit, rounded to 3 decimals —
+ * what the till records for an untracked line. Null when no positive weight
+ * results (zero price, or an amount too small to reach 0.001).
+ */
+export function weightForAmount(shuma: number, cmimi: number): number | null {
+  if (!Number.isFinite(shuma) || !Number.isFinite(cmimi) || shuma <= 0 || cmimi <= 0) {
+    return null
+  }
+  const sasia = Number((shuma / cmimi).toFixed(3))
+  return sasia > 0 ? sasia : null
+}
+
 /** Max decimal places accepted for a weighted quantity. */
 const WEIGHTED_DECIMALS = 3
 

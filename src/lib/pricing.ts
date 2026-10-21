@@ -107,8 +107,9 @@ type Tx = Prisma.TransactionClient
  *
  * Both statements are self-referential SQL so they stay correct under
  * concurrent sales — neither depends on a value read earlier in the request.
- * Call this only after the caller's own atomic stock decrement has succeeded,
- * so the row is already locked by this transaction.
+ * Call this only after the caller's own atomic stock decrement has succeeded
+ * (or `lockProduct` for an untracked product), so the row is already locked
+ * by this transaction.
  */
 export async function applyConsumption(tx: Tx, productId: number, sasia: number) {
   await tx.$executeRaw`
@@ -131,6 +132,15 @@ export async function applyConsumption(tx: Tx, productId: number, sasia: number)
   `
 }
 
+/**
+ * Takes the product's row lock without changing it. Untracked (kg) lines have
+ * no stock decrement to take it for them, but still need it before re-reading
+ * prices and calling `applyConsumption`.
+ */
+export async function lockProduct(tx: Tx, productId: number) {
+  await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${productId} FOR UPDATE`
+}
+
 export interface PriceUpdate {
   cmimiBlerjes: number
   /** Omitted when the delivery did not change the sale price. */
@@ -143,6 +153,8 @@ export interface PriceUpdate {
  *
  * No stock on hand → nothing to protect, so the prices apply at once.
  * Stock on hand → the prices wait behind the existing units.
+ * Stock not tracked (`tracked` false, e.g. kg) → there is no count of old
+ * units to wait behind, so the prices apply at once as well.
  *
  * If a change is already pending when another delivery arrives, the newest
  * prices win and `sasiaVjeter` is left alone: those original units are still
@@ -152,9 +164,10 @@ export interface PriceUpdate {
  */
 export function planPriceUpdate(
   product: PricedProduct,
-  next: PriceUpdate
+  next: PriceUpdate,
+  tracked = true
 ): Prisma.ProductUpdateInput {
-  const stokuAktual = product.sasia
+  const stokuAktual = tracked ? product.sasia : 0
   const cmimiShitjes = next.cmimiShitjes ?? product.cmimiShitjes
 
   if (stokuAktual <= 0) {

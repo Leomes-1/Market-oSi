@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
-import { mergeByProductId, validateQuantity } from '@/lib/validation'
-import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { mergeByProductId, tracksStock, validateQuantity } from '@/lib/validation'
+import { applyConsumption, lockProduct, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export const dynamic = 'force-dynamic'
@@ -158,20 +158,26 @@ export async function POST(req: NextRequest) {
       }> = []
 
       for (const line of validated) {
-        // Conditional decrement: the `sasia: { gte }` guard and the write are a
-        // single atomic statement, so stock can never be driven below zero. It
-        // also takes the row lock, which is what makes the re-read consistent.
-        const updated = await tx.product.updateMany({
-          where: { id: line.productId, sasia: { gte: line.sasia } },
-          data: { sasia: { decrement: line.sasia } },
-        })
-        if (updated.count !== 1) {
-          const current = byId.get(line.productId)
-          throw new ApiFailure(
-            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
-            409,
-            'INSUFFICIENT_STOCK'
-          )
+        if (tracksStock(line.njesia)) {
+          // Conditional decrement: the `sasia: { gte }` guard and the write are
+          // a single atomic statement, so stock can never be driven below zero.
+          // It also takes the row lock, which is what makes the re-read
+          // consistent.
+          const updated = await tx.product.updateMany({
+            where: { id: line.productId, sasia: { gte: line.sasia } },
+            data: { sasia: { decrement: line.sasia } },
+          })
+          if (updated.count !== 1) {
+            const current = byId.get(line.productId)
+            throw new ApiFailure(
+              `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
+              409,
+              'INSUFFICIENT_STOCK'
+            )
+          }
+        } else {
+          // Untracked (kg): no stock to take, only the lock for the re-read.
+          await lockProduct(tx, line.productId)
         }
 
         // Personal use draws down the old-price stock exactly like a sale, so a

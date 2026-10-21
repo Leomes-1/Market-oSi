@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
+import { isLowStock } from '@/lib/utils'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
     })
 
     const filtered = stokUlet
-      ? products.filter((p) => p.sasia <= p.stokuMinimal)
+      ? products.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
       : products
 
     // Cashiers work the till and have no business seeing cost prices, which

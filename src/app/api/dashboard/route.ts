@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
+import { isLowStock } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -76,7 +77,7 @@ export async function GET(request: NextRequest) {
         select: { totali: true, fitimi: true },
       }),
       prisma.product.findMany({
-        select: { id: true, emri: true, sasia: true, stokuMinimal: true, kategoria: true },
+        select: { id: true, emri: true, sasia: true, stokuMinimal: true, kategoria: true, njesia: true },
         orderBy: { emri: 'asc' },
       }),
       prisma.supplier.count(),
@@ -141,7 +142,7 @@ export async function GET(request: NextRequest) {
 
     // Low stock
     const lowStockProducts = allProducts
-      .filter((p) => p.sasia <= p.stokuMinimal)
+      .filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
       .sort((a, b) => a.sasia / a.stokuMinimal - b.sasia / b.stokuMinimal)
       .slice(0, 8)
 

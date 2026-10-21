@@ -9,6 +9,7 @@ import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
+import { tracksStock, weightForAmount } from '@/lib/validation'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import {
   RiAddLine,
@@ -24,7 +25,25 @@ type Product = CatalogProduct
 
 interface CartItem {
   product: Product
+  /** For an amount line, derived from `shuma`; 0 until an amount is typed. */
   sasia: number
+  /**
+   * Untracked (kg) products are sold by the amount: the cashier types the
+   * price in Lek and the weight is worked out from it. Null until typed.
+   */
+  shuma?: number | null
+}
+
+/** Weight for an amount line, or 0 when no valid amount has been typed. */
+function weightOf(item: CartItem) {
+  if (item.shuma == null) return 0
+  return weightForAmount(item.shuma, item.product.cmimiShitjes) ?? 0
+}
+
+/** What the line charges: the typed amount exactly, or price × quantity. */
+function lineTotal(item: CartItem) {
+  if (!tracksStock(item.product.njesia)) return item.shuma ?? 0
+  return item.product.cmimiShitjes * item.sasia
 }
 
 interface CompletedSale {
@@ -65,6 +84,7 @@ export default function ShitjetPage() {
   const [scanMessage, setScanMessage] = useState('')
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products')
   const barcodeRef = useRef<SearchInputHandle>(null)
+  const amountRefs = useRef<Map<number, HTMLInputElement>>(new Map())
   const audioCtxRef = useRef<AudioContext | null>(null)
   const receiptModalRef = useRef<CompletedSale | null>(null)
 
@@ -161,6 +181,12 @@ export default function ShitjetPage() {
       return
     }
 
+    if (!tracksStock(product.njesia)) {
+      addAmountLine(product)
+      triggerFlash('success', `${product.emri} — shkruaj shumën`, 900)
+      return
+    }
+
     if (product.sasia <= 0) {
       toast.error(`${product.emri} — Stoku i mbaruar`)
       triggerFlash('error', 'Stoku i mbaruar', 1500)
@@ -202,7 +228,30 @@ export default function ShitjetPage() {
     barcodeRef.current?.focus()
   }
 
+  /**
+   * Untracked (kg) products: put the line in the cart with no amount yet and
+   * move the cursor to its amount field. Scanning it again just returns there.
+   */
+  function addAmountLine(product: Product) {
+    setCart((prev) =>
+      prev.some((i) => i.product.id === product.id)
+        ? prev
+        : [...prev, { product, sasia: 0, shuma: null }]
+    )
+    setKerkimi('')
+    // After the line has rendered, so its input exists.
+    setTimeout(() => {
+      const el = amountRefs.current.get(product.id)
+      el?.focus()
+      el?.select()
+    }, 0)
+  }
+
   function addToCart(product: Product) {
+    if (!tracksStock(product.njesia)) {
+      addAmountLine(product)
+      return
+    }
     if (product.sasia <= 0) {
       toast.error(`${product.emri} - Stoku i mbaruar`)
       return
@@ -312,9 +361,33 @@ export default function ShitjetPage() {
     }
   }
 
+  // Amount in Lek for an untracked line; up to 2 decimals.
+  function handleAmountInput(item: CartItem, inputStr: string) {
+    if (!/^(\d*\.?\d{0,2})?$/.test(inputStr)) return
+    setRawValues((prev) => ({ ...prev, [item.product.id]: inputStr }))
+    const parsed = parseFloat(inputStr)
+    const shuma = isNaN(parsed) || parsed <= 0 ? null : parsed
+    setCart((prev) =>
+      prev.map((i) => {
+        if (i.product.id !== item.product.id) return i
+        const next = { ...i, shuma }
+        return { ...next, sasia: weightOf(next) }
+      })
+    )
+  }
+
+  function handleAmountBlur(item: CartItem) {
+    setRawValues((prev) => {
+      const next = { ...prev }
+      delete next[item.product.id]
+      return next
+    })
+  }
+
   function getDisplayValue(item: CartItem): string {
     const raw = rawValues[item.product.id]
     if (raw !== undefined) return raw
+    if (!tracksStock(item.product.njesia)) return item.shuma == null ? '' : String(item.shuma)
     return isWeighted(item.product.njesia) ? item.sasia.toFixed(3) : item.sasia.toString()
   }
 
@@ -335,11 +408,12 @@ export default function ShitjetPage() {
     )
   }
 
-  const totali = cart.reduce((sum, i) => sum + i.product.cmimiShitjes * i.sasia, 0)
+  const totali = cart.reduce((sum, i) => sum + lineTotal(i), 0)
   // cmimiBlerjes is withheld from cashier sessions by the API, so this only
   // ever resolves for admins — who are the only ones shown the figure.
+  // Amount lines: profit = amount − weight × cost per kg.
   const fitimi = cart.reduce(
-    (sum, i) => sum + (i.product.cmimiShitjes - (i.product.cmimiBlerjes ?? 0)) * i.sasia,
+    (sum, i) => sum + lineTotal(i) - (i.product.cmimiBlerjes ?? 0) * i.sasia,
     0
   )
 
@@ -348,19 +422,24 @@ export default function ShitjetPage() {
       toast.error('Shporta është bosh')
       return
     }
+    const missing = cart.find((i) => !tracksStock(i.product.njesia) && weightOf(i) <= 0)
+    if (missing) {
+      toast.error(`Shkruaj shumën për: ${missing.product.emri}`)
+      amountRefs.current.get(missing.product.id)?.focus()
+      return
+    }
     setLoading(true)
     try {
       const res = await fetch('/api/sales', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          items: cart.map((i) => ({
-            productId: i.product.id,
-            emriProduktit: i.product.emri,
-            sasia: i.sasia,
-            cmimiBlerjes: i.product.cmimiBlerjes,
-            cmimiShitjes: i.product.cmimiShitjes,
-          })),
+          // Amount lines send the amount; the server works out the weight.
+          items: cart.map((i) =>
+            tracksStock(i.product.njesia)
+              ? { productId: i.product.id, sasia: i.sasia }
+              : { productId: i.product.id, shuma: i.shuma }
+          ),
         }),
       })
 
@@ -499,7 +578,8 @@ export default function ShitjetPage() {
               <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
                 {filteredProducts.map((product) => {
                   const inCart = cart.find((i) => i.product.id === product.id)
-                  const outOfStock = product.sasia <= 0
+                  const tracked = tracksStock(product.njesia)
+                  const outOfStock = tracked && product.sasia <= 0
                   return (
                     <motion.button
                       key={product.id}
@@ -519,7 +599,9 @@ export default function ShitjetPage() {
                         <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
                         {inCart && (
                           <span className="badge-blue ml-1 flex-shrink-0 text-xs">
-                            {isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
+                            {!tracked
+                              ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
+                              : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
                           </span>
                         )}
                       </div>
@@ -533,9 +615,15 @@ export default function ShitjetPage() {
                         <span className="text-sm sm:text-base font-bold text-slate-900">
                           {formatCurrency(product.cmimiShitjes)}
                         </span>
-                        <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
-                          {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
-                        </span>
+                        {tracked ? (
+                          <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
+                            {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
+                          </span>
+                        ) : (
+                          <span className="text-xs font-medium hidden sm:block text-slate-400">
+                            / {product.njesia}
+                          </span>
+                        )}
                       </div>
                     </motion.button>
                   )
@@ -596,43 +684,83 @@ export default function ShitjetPage() {
                           <RiDeleteBin6Line className="text-lg" />
                         </button>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => updateSasia(item.product.id, isWeighted(item.product.njesia) ? -0.250 : -1)}
-                            className="w-9 h-9 lg:w-8 lg:h-8 rounded-lg bg-slate-100 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition-colors flex-shrink-0"
-                          >
-                            <RiSubtractLine className="text-sm" />
-                          </button>
-                          <input
-                            type="text"
-                            inputMode={isWeighted(item.product.njesia) ? 'decimal' : 'numeric'}
-                            value={getDisplayValue(item)}
-                            onChange={(e) => handleQuantityInput(item, e.target.value)}
-                            onFocus={(e) => {
-                              setRawValues((prev) => ({
-                                ...prev,
-                                [item.product.id]: isWeighted(item.product.njesia)
-                                  ? item.sasia.toFixed(3)
-                                  : item.sasia.toString(),
-                              }))
-                              e.target.select()
-                            }}
-                            onBlur={() => handleQuantityBlur(item)}
-                            className="w-20 h-9 lg:h-7 text-center text-sm font-semibold border border-slate-200 rounded-md focus:outline-none focus:border-blue-400"
-                          />
-                          <span className="text-xs text-slate-400 min-w-[2rem]">{item.product.njesia}</span>
-                          <button
-                            onClick={() => updateSasia(item.product.id, isWeighted(item.product.njesia) ? 0.250 : 1)}
-                            className="w-9 h-9 lg:w-8 lg:h-8 rounded-lg bg-slate-100 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition-colors flex-shrink-0"
-                          >
-                            <RiAddLine className="text-sm" />
-                          </button>
+                      {!tracksStock(item.product.njesia) ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              ref={(el) => {
+                                if (el) amountRefs.current.set(item.product.id, el)
+                                else amountRefs.current.delete(item.product.id)
+                              }}
+                              type="text"
+                              inputMode="decimal"
+                              value={getDisplayValue(item)}
+                              placeholder="Shuma"
+                              onChange={(e) => handleAmountInput(item, e.target.value)}
+                              onFocus={(e) => e.target.select()}
+                              onBlur={() => handleAmountBlur(item)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  barcodeRef.current?.focus()
+                                }
+                              }}
+                              className={`w-24 h-9 lg:h-7 text-center text-sm font-semibold border rounded-md focus:outline-none focus:border-blue-400 ${
+                                item.shuma != null && weightOf(item) <= 0
+                                  ? 'border-red-300'
+                                  : 'border-slate-200'
+                              }`}
+                            />
+                            <span className="text-xs text-slate-400">L</span>
+                            <span className="text-xs text-slate-500 tabular-nums ml-1">
+                              {weightOf(item) > 0
+                                ? `= ${weightOf(item).toFixed(3)} ${item.product.njesia}`
+                                : `${formatCurrency(item.product.cmimiShitjes)} / ${item.product.njesia}`}
+                            </span>
+                          </div>
+                          <span className="text-sm font-bold text-slate-900">
+                            {formatCurrency(lineTotal(item))}
+                          </span>
                         </div>
-                        <span className="text-sm font-bold text-slate-900">
-                          {formatCurrency(item.product.cmimiShitjes * item.sasia)}
-                        </span>
-                      </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => updateSasia(item.product.id, isWeighted(item.product.njesia) ? -0.250 : -1)}
+                              className="w-9 h-9 lg:w-8 lg:h-8 rounded-lg bg-slate-100 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition-colors flex-shrink-0"
+                            >
+                              <RiSubtractLine className="text-sm" />
+                            </button>
+                            <input
+                              type="text"
+                              inputMode={isWeighted(item.product.njesia) ? 'decimal' : 'numeric'}
+                              value={getDisplayValue(item)}
+                              onChange={(e) => handleQuantityInput(item, e.target.value)}
+                              onFocus={(e) => {
+                                setRawValues((prev) => ({
+                                  ...prev,
+                                  [item.product.id]: isWeighted(item.product.njesia)
+                                    ? item.sasia.toFixed(3)
+                                    : item.sasia.toString(),
+                                }))
+                                e.target.select()
+                              }}
+                              onBlur={() => handleQuantityBlur(item)}
+                              className="w-20 h-9 lg:h-7 text-center text-sm font-semibold border border-slate-200 rounded-md focus:outline-none focus:border-blue-400"
+                            />
+                            <span className="text-xs text-slate-400 min-w-[2rem]">{item.product.njesia}</span>
+                            <button
+                              onClick={() => updateSasia(item.product.id, isWeighted(item.product.njesia) ? 0.250 : 1)}
+                              className="w-9 h-9 lg:w-8 lg:h-8 rounded-lg bg-slate-100 hover:bg-slate-200 active:bg-slate-300 flex items-center justify-center transition-colors flex-shrink-0"
+                            >
+                              <RiAddLine className="text-sm" />
+                            </button>
+                          </div>
+                          <span className="text-sm font-bold text-slate-900">
+                            {formatCurrency(lineTotal(item))}
+                          </span>
+                        </div>
+                      )}
                     </motion.div>
                   ))}
                 </div>

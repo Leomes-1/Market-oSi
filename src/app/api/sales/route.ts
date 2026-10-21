@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
-import { mergeByProductId, validateQuantity } from '@/lib/validation'
-import { applyConsumption, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { tracksStock, validateQuantity, weightForAmount } from '@/lib/validation'
+import { applyConsumption, lockProduct, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { stripProfitFromSales } from '@/lib/sale-visibility'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
@@ -63,7 +63,30 @@ export async function GET(req: NextRequest) {
 
 interface IncomingItem {
   productId: number
-  sasia: number
+  /** Quantity; null on an amount line. */
+  sasia: number | null
+  /** Amount in Lek, sent instead of `sasia` for untracked (kg) products. */
+  shuma: number | null
+}
+
+/**
+ * Collapses repeated productIds, summing quantities and amounts separately,
+ * so the stock check sees the full quantity of a product listed twice.
+ */
+function mergeLines(items: IncomingItem[]): IncomingItem[] {
+  const sum = (a: number | null, b: number | null) =>
+    a === null ? b : b === null ? a : Number((a + b).toFixed(3))
+  const merged = new Map<number, IncomingItem>()
+  for (const item of items) {
+    const existing = merged.get(item.productId)
+    if (existing) {
+      existing.sasia = sum(existing.sasia, item.sasia)
+      existing.shuma = sum(existing.shuma, item.shuma)
+    } else {
+      merged.set(item.productId, { ...item })
+    }
+  }
+  return Array.from(merged.values())
 }
 
 export async function POST(req: NextRequest) {
@@ -86,16 +109,21 @@ export async function POST(req: NextRequest) {
       if (!Number.isInteger(productId) || productId <= 0) {
         return badRequest('Produkt i pavlefshëm në shitje')
       }
-      const sasia = Number(item?.sasia)
-      if (!Number.isFinite(sasia)) {
+      const hasShuma = item?.shuma !== undefined && item?.shuma !== null
+      const shuma = hasShuma ? Number(item.shuma) : null
+      if (shuma !== null && (!Number.isFinite(shuma) || shuma <= 0)) {
+        return badRequest('Shuma e pavlefshme në shitje')
+      }
+      const sasia = shuma === null ? Number(item?.sasia) : null
+      if (sasia !== null && !Number.isFinite(sasia)) {
         return badRequest('Sasi e pavlefshme në shitje')
       }
-      rawLines.push({ productId, sasia })
+      rawLines.push({ productId, sasia, shuma })
     }
 
     // The same product listed twice is one line, so the stock check sees the
     // full quantity instead of each line passing against the same stock.
-    const lines = mergeByProductId(rawLines)
+    const lines = mergeLines(rawLines)
 
     const sale = await prisma.$transaction(async (tx) => {
       const products = await tx.product.findMany({
@@ -105,17 +133,41 @@ export async function POST(req: NextRequest) {
 
       // Validate every line before touching stock, so a bad line fails the
       // whole sale rather than half-applying it.
-      const validated: Array<{ productId: number; emri: string; sasia: number }> = []
+      const validated: Array<{
+        productId: number
+        emri: string
+        sasia: number
+        tracked: boolean
+        shuma: number | null
+      }> = []
       for (const line of lines) {
         const product = byId.get(line.productId)
         if (!product) {
           throw new ApiFailure(`Produkti nuk u gjet (id ${line.productId})`, 404, 'NOT_FOUND')
         }
+        const tracked = tracksStock(product.njesia)
+
+        // An amount line is only meaningful for an untracked product, and
+        // cannot be mixed with a quantity line for the same product.
+        if (line.shuma !== null) {
+          if (tracked || line.sasia !== null) {
+            throw new ApiFailure(`Shuma nuk lejohet për: ${product.emri}`, 400, 'VALIDATION')
+          }
+          // Weighed at the price the till showed: the current (old, while a
+          // change is pending) sale price per unit.
+          const sasia = weightForAmount(line.shuma, product.cmimiShitjes)
+          if (sasia === null) {
+            throw new ApiFailure(`Shuma shumë e vogël për: ${product.emri}`, 400, 'VALIDATION')
+          }
+          validated.push({ productId: product.id, emri: product.emri, sasia, tracked, shuma: line.shuma })
+          continue
+        }
+
         const qty = validateQuantity(line.sasia, product.njesia, product.emri)
         if (!qty.ok) {
           throw new ApiFailure(qty.error, 400, 'VALIDATION')
         }
-        validated.push({ productId: product.id, emri: product.emri, sasia: qty.value })
+        validated.push({ productId: product.id, emri: product.emri, sasia: qty.value, tracked, shuma: null })
       }
 
       let totali = 0
@@ -130,21 +182,27 @@ export async function POST(req: NextRequest) {
       }> = []
 
       for (const line of validated) {
-        // Conditional decrement: the `sasia: { gte }` guard and the write are a
-        // single atomic statement, so two tills selling the last unit cannot
-        // both succeed and stock can never be driven below zero. It also takes
-        // the row lock, which is what makes the re-read below consistent.
-        const updated = await tx.product.updateMany({
-          where: { id: line.productId, sasia: { gte: line.sasia } },
-          data: { sasia: { decrement: line.sasia } },
-        })
-        if (updated.count !== 1) {
-          const current = byId.get(line.productId)
-          throw new ApiFailure(
-            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
-            409,
-            'INSUFFICIENT_STOCK'
-          )
+        if (line.tracked) {
+          // Conditional decrement: the `sasia: { gte }` guard and the write are
+          // a single atomic statement, so two tills selling the last unit cannot
+          // both succeed and stock can never be driven below zero. It also takes
+          // the row lock, which is what makes the re-read below consistent.
+          const updated = await tx.product.updateMany({
+            where: { id: line.productId, sasia: { gte: line.sasia } },
+            data: { sasia: { decrement: line.sasia } },
+          })
+          if (updated.count !== 1) {
+            const current = byId.get(line.productId)
+            throw new ApiFailure(
+              `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
+              409,
+              'INSUFFICIENT_STOCK'
+            )
+          }
+        } else {
+          // Stock is not counted, so nothing to decrement — take the row lock
+          // explicitly instead, for the same consistent re-read.
+          await lockProduct(tx, line.productId)
         }
 
         // Re-read under the lock: prices and the pending-change counters must
@@ -157,8 +215,14 @@ export async function POST(req: NextRequest) {
         const pricing = priceConsumption(locked, line.sasia)
         await applyConsumption(tx, line.productId, line.sasia)
 
-        const lineFitimi = (pricing.cmimiShitjes - pricing.cmimiBlerjes) * line.sasia
-        totali += pricing.cmimiShitjes * line.sasia
+        // An amount line charges exactly what was typed. The stored unit price
+        // is the effective one (amount ÷ weight), so every place that shows
+        // `cmimiShitjes × sasia` — receipts, history, edits — still lands on
+        // that amount, and the profit is amount − weight × cost.
+        const lineTotali = line.shuma ?? pricing.cmimiShitjes * line.sasia
+        const cmimiShitjes = line.shuma !== null ? line.shuma / line.sasia : pricing.cmimiShitjes
+        const lineFitimi = lineTotali - pricing.cmimiBlerjes * line.sasia
+        totali += lineTotali
         fitimi += lineFitimi
 
         itemData.push({
@@ -166,7 +230,7 @@ export async function POST(req: NextRequest) {
           emriProduktit: line.emri,
           sasia: line.sasia,
           cmimiBlerjes: pricing.cmimiBlerjes,
-          cmimiShitjes: pricing.cmimiShitjes,
+          cmimiShitjes,
           fitimi: lineFitimi,
         })
       }

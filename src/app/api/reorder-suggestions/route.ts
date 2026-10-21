@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
+import { isLowStock } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,7 +16,8 @@ export async function GET() {
       orderBy: { emri: 'asc' },
     })
 
-    const lowStock = products.filter((p) => p.sasia <= p.stokuMinimal)
+    // Untracked (kg) products have no meaningful count to reorder from.
+    const lowStock = products.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
 
     type GroupedItem = {
       id: number
