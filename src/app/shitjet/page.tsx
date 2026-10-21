@@ -19,7 +19,9 @@ import {
   RiPrinterLine,
   RiCheckLine,
   RiBarcodeLine,
+  RiMenuLine,
 } from 'react-icons/ri'
+import { useDesktopSidebar } from '@/components/layout/ClientLayout'
 
 type Product = CatalogProduct
 
@@ -89,6 +91,7 @@ function isWeighted(njesia: string) {
 
 export default function ShitjetPage() {
   const { role } = useRole()
+  const desktopSidebar = useDesktopSidebar()
   const {
     products,
     loading: productsLoading,
@@ -579,7 +582,21 @@ export default function ShitjetPage() {
           }`}
         >
           <div className="p-4 sm:p-5 border-b border-slate-100 space-y-3">
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900">Shitjet — POS</h1>
+            <div className="flex items-center gap-2">
+              {/* Desktop only — phones already have the top-bar menu button. */}
+              {desktopSidebar.collapsible && (
+                <button
+                  onClick={desktopSidebar.toggle}
+                  className="hidden lg:inline-flex p-1.5 -ml-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                  aria-label={desktopSidebar.open ? 'Mbyll menunë' : 'Hap menunë'}
+                  aria-expanded={desktopSidebar.open}
+                  title={desktopSidebar.open ? 'Mbyll menunë' : 'Hap menunë'}
+                >
+                  <RiMenuLine className="text-xl" />
+                </button>
+              )}
+              <h1 className="text-lg sm:text-xl font-bold text-slate-900">Shitjet — POS</h1>
+            </div>
 
             {/* Barcode Scanner Input */}
             <div>
