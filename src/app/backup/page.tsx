@@ -12,6 +12,7 @@ import {
   RiDownloadLine,
   RiFlaskLine,
   RiHistoryLine,
+  RiMailSendLine,
   RiSaveLine,
 } from 'react-icons/ri'
 
@@ -32,12 +33,25 @@ interface Failure {
   message: string
 }
 
+interface EmailStatus {
+  at: string
+  ok: boolean
+  trigger: 'cron' | 'manual'
+  lastSuccessAt: string | null
+  error?: string
+}
+
 interface Status {
   configured: boolean
   problem: string | null
   snapshots: Snapshot[]
   lastFailure: Failure | null
+  lastEmail: EmailStatus | null
+  emailConfigured: boolean
 }
+
+/** The weekly email is sent on Sundays; warn once it is a day overdue. */
+const EMAIL_STALE_MS = 8 * 24 * 60 * 60 * 1000
 
 interface Preview {
   createdAt: string
@@ -163,6 +177,7 @@ export default function BackupPage() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [emailing, setEmailing] = useState(false)
 
   const [restoreTarget, setRestoreTarget] = useState<Snapshot | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -202,6 +217,21 @@ export default function BackupPage() {
   }, [status])
 
   const latest = status?.snapshots[0] ?? null
+
+  const lastEmail = status?.lastEmail ?? null
+  const lastEmailSuccess = lastEmail?.lastSuccessAt ?? null
+  // Date.now() at render is fine here: the page re-renders on every fetch.
+  const emailProblem: string | null = !status?.configured
+    ? null
+    : !status.emailConfigured
+    ? 'GMAIL_USER / GMAIL_APP_PASSWORD nuk janë vendosur — backup-i javor me email nuk dërgohet.'
+    : lastEmail && !lastEmail.ok
+    ? `Email-i i fundit dështoi më ${formatDateTime(lastEmail.at)}: ${lastEmail.error ?? 'gabim i panjohur'}`
+    : !lastEmailSuccess
+    ? 'Asnjë backup nuk është dërguar ende me email.'
+    : Date.now() - new Date(lastEmailSuccess).getTime() > EMAIL_STALE_MS
+    ? `Email-i i fundit i suksesshëm është më i vjetër se 8 ditë (${formatDateTime(lastEmailSuccess)}).`
+    : null
   const failureIsCurrent =
     status?.lastFailure != null && (!latest || status.lastFailure.at > latest.createdAt)
 
@@ -216,6 +246,20 @@ export default function BackupPage() {
       toast.error(error instanceof Error ? error.message : 'Backup-i dështoi')
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleEmail = async () => {
+    setEmailing(true)
+    try {
+      const res = await fetch('/api/backups/email', { method: 'POST' })
+      if (!res.ok) throw new Error(await readError(res, 'Dërgimi i email-it dështoi'))
+      toast.success('Backup-i u dërgua në email')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Dërgimi i email-it dështoi')
+    } finally {
+      setEmailing(false)
+      await fetchStatus()
     }
   }
 
@@ -296,14 +340,24 @@ export default function BackupPage() {
         title="Backup & Rikthim"
         subtitle="Kopje automatike të të gjitha të dhënave, me mundësi rikthimi në çdo pikë"
         action={
-          <button
-            onClick={handleCreate}
-            disabled={creating || !status?.configured}
-            className="btn-primary flex items-center gap-2 disabled:opacity-50"
-          >
-            <RiSaveLine />
-            {creating ? 'Duke ruajtur...' : 'Bëj backup tani'}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleEmail}
+              disabled={emailing || !status?.configured || !status?.emailConfigured}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
+              <RiMailSendLine />
+              {emailing ? 'Duke dërguar...' : 'Dërgo tani në email'}
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={creating || !status?.configured}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
+              <RiSaveLine />
+              {creating ? 'Duke ruajtur...' : 'Bëj backup tani'}
+            </button>
+          </div>
         }
       />
 
@@ -332,6 +386,19 @@ export default function BackupPage() {
         </div>
       )}
 
+      {emailProblem && (
+        <div className="card p-4 mb-6 border-amber-200 bg-amber-50 flex gap-3">
+          <RiAlertLine className="text-amber-500 text-xl flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-800">
+            <p className="font-semibold break-words">{emailProblem}</p>
+            <p className="text-xs mt-1 text-amber-700">
+              Deri sa të rregullohet, shtyp “Shkarko” te backup-i i fundit dhe ruaje skedarin
+              diku jashtë (USB, Google Drive).
+            </p>
+          </div>
+        </div>
+      )}
+
       {status?.configured && (
         <div className="card p-4 mb-6 text-sm text-slate-600 flex flex-wrap gap-x-6 gap-y-1">
           <span>
@@ -340,6 +407,12 @@ export default function BackupPage() {
           </span>
           <span>
             Gjithsej: <strong className="text-slate-800">{status.snapshots.length}</strong>
+          </span>
+          <span>
+            Email-i i fundit:{' '}
+            <strong className="text-slate-800">
+              {lastEmailSuccess ? formatDateTime(lastEmailSuccess) : 'asnjë'}
+            </strong>
           </span>
           <span className="text-slate-400">
             Ruhen të gjitha për 48 orë, pastaj një në orë deri në 7 ditë, një në ditë deri në 30 ditë.

@@ -5,5 +5,11 @@
     "src/app/**/route.ts": {
       "maxDuration": 15
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/backups/email",
+      "schedule": "0 20 * * 0"
+    }
+  ]
 }

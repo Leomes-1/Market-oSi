@@ -9,6 +9,7 @@ import {
   recordFailure,
 } from '@/lib/backups/storage'
 import { pruneSnapshots, takeSnapshot } from '@/lib/backups/snapshot'
+import { isEmailConfigured, readEmailStatus } from '@/lib/backups/email'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,15 +24,35 @@ export async function GET() {
       problem: 'SUPABASE_SERVICE_ROLE_KEY nuk është vendosur — backup-et janë të çaktivizuara.',
       snapshots: [],
       lastFailure: null,
+      lastEmail: null,
+      emailConfigured: isEmailConfigured(),
     })
   }
 
   try {
-    const [snapshots, lastFailure] = await Promise.all([listSnapshots(), readLastFailure()])
-    return NextResponse.json({ configured: true, problem: null, snapshots, lastFailure })
+    const [snapshots, lastFailure, lastEmail] = await Promise.all([
+      listSnapshots(),
+      readLastFailure(),
+      readEmailStatus(),
+    ])
+    return NextResponse.json({
+      configured: true,
+      problem: null,
+      snapshots,
+      lastFailure,
+      lastEmail,
+      emailConfigured: isEmailConfigured(),
+    })
   } catch (error) {
     if (error instanceof BackupConfigError) {
-      return NextResponse.json({ configured: false, problem: error.message, snapshots: [], lastFailure: null })
+      return NextResponse.json({
+        configured: false,
+        problem: error.message,
+        snapshots: [],
+        lastFailure: null,
+        lastEmail: null,
+        emailConfigured: isEmailConfigured(),
+      })
     }
     return handleApiError(error, 'Backups GET')
   }

@@ -41,7 +41,12 @@ export async function middleware(request: NextRequest) {
   // redirect, so fetch() callers get a status they can act on. Individual
   // handlers still run their own requireRole check — this is the outer gate,
   // not the only one.
-  if (!user && isApi) {
+  // The one exception: Vercel Cron has no session. That route refuses any
+  // request without the CRON_SECRET bearer token, and its POST (the admin
+  // button) still checks the session role itself.
+  const isCronRoute = pathname === '/api/backups/email'
+
+  if (!user && isApi && !isCronRoute) {
     return NextResponse.json(
       { error: 'Jo i autentikuar', code: 'UNAUTHENTICATED' },
       { status: 401 }
