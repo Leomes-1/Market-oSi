@@ -650,7 +650,7 @@ export default function HistorikuPage() {
                       className="flex-1"
                       value={addProductSearch}
                       onChange={setAddProductSearch}
-                      autoFocus
+                      autoFocus="always"
                       placeholder="Kërko produkt për të shtuar..."
                       inputClassName="text-sm"
                     />

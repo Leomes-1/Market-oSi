@@ -1,8 +1,17 @@
 'use client'
 
-import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { RiSearchLine, RiBarcodeLine, RiCloseLine } from 'react-icons/ri'
 import { cn } from '@/lib/utils'
+
+/** Mouse/trackpad as the primary pointer — i.e. not a phone or tablet. */
+function isDesktopPointer() {
+  try {
+    return window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  } catch {
+    return false
+  }
+}
 
 export interface SearchInputHandle {
   focus: () => void
@@ -17,7 +26,12 @@ interface SearchInputProps {
   onSubmit?: (value: string) => void
   /** Barcode style: monospace, no autocorrect, barcode icon. */
   variant?: 'search' | 'barcode'
-  autoFocus?: boolean
+  /**
+   * Focus the field when it mounts, so a scan works without clicking it
+   * first. `true` does this on desktop only (a fine pointer), so opening a
+   * page on a phone doesn't pop the keyboard; 'always' focuses everywhere.
+   */
+  autoFocus?: boolean | 'always'
   disabled?: boolean
   className?: string
   inputClassName?: string
@@ -62,6 +76,13 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
 ) {
   const inputRef = useRef<HTMLInputElement>(null)
   const isBarcode = variant === 'barcode'
+
+  useEffect(() => {
+    if (!autoFocus) return
+    if (autoFocus === 'always' || isDesktopPointer()) inputRef.current?.focus()
+    // Mount only: re-focusing on later renders would steal focus from other fields.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
@@ -132,7 +153,6 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
         onMouseDown={handleMouseDown}
         placeholder={placeholder}
         disabled={disabled}
-        autoFocus={autoFocus}
         autoComplete="off"
         spellCheck={false}
         aria-label={ariaLabel ?? placeholder}

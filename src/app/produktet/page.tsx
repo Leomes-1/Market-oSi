@@ -256,6 +256,7 @@ export default function ProduktetPage() {
             value={kerkimi}
             onChange={setKerkimi}
             placeholder="Kërko produkt, barkod..."
+            autoFocus
             selectOnScan
           />
           <div className="relative sm:w-52">

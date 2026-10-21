@@ -590,7 +590,7 @@ export default function ShitjetPage() {
                 onChange={setBarkodi}
                 onSubmit={handleBarcodeSubmit}
                 tone={scanFlash ?? 'neutral'}
-                autoFocus
+                autoFocus="always"
                 placeholder="Skano ose shkruaj barkodin..."
                 inputClassName="py-2.5 text-sm font-medium rounded-xl border-2"
                 icon={
