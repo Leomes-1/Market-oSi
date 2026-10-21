@@ -60,6 +60,29 @@ interface CompletedSale {
   }>
 }
 
+const CART_WIDTH_KEY = 'pos.cartWidth'
+const CART_MIN_WIDTH = 300
+/** Space always left for the product grid when the cart is dragged wider. */
+const PRODUCTS_MIN_WIDTH = 320
+
+function readCartWidth(): number | null {
+  try {
+    const v = Number(localStorage.getItem(CART_WIDTH_KEY))
+    return Number.isFinite(v) && v >= CART_MIN_WIDTH ? v : null
+  } catch {
+    return null
+  }
+}
+
+function saveCartWidth(width: number | null) {
+  try {
+    if (width === null) localStorage.removeItem(CART_WIDTH_KEY)
+    else localStorage.setItem(CART_WIDTH_KEY, String(Math.round(width)))
+  } catch {
+    // Storage blocked — the width just won't be remembered.
+  }
+}
+
 function isWeighted(njesia: string) {
   return njesia === 'kg' || njesia === 'gram' || njesia === 'litër'
 }
@@ -85,6 +108,44 @@ export default function ShitjetPage() {
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products')
   const barcodeRef = useRef<SearchInputHandle>(null)
   const amountRefs = useRef<Map<number, HTMLInputElement>>(new Map())
+  const contentRef = useRef<HTMLDivElement>(null)
+  // Null until the cashier drags the edge: the responsive default applies.
+  const [cartWidth, setCartWidth] = useState<number | null>(null)
+
+  useEffect(() => { setCartWidth(readCartWidth()) }, [])
+
+  // Drag the cart's left edge. Width is measured from the content area's right
+  // edge, clamped so neither column can be squeezed to nothing.
+  function startCartResize(e: React.PointerEvent<HTMLDivElement>) {
+    const container = contentRef.current
+    if (!container) return
+    e.preventDefault()
+    const rect = container.getBoundingClientRect()
+    const max = Math.max(CART_MIN_WIDTH, rect.width - PRODUCTS_MIN_WIDTH)
+    let latest: number | null = null
+
+    function onMove(ev: PointerEvent) {
+      latest = Math.min(max, Math.max(CART_MIN_WIDTH, rect.right - ev.clientX))
+      setCartWidth(latest)
+    }
+    function onUp() {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+      if (latest !== null) saveCartWidth(latest)
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  function resetCartWidth() {
+    setCartWidth(null)
+    saveCartWidth(null)
+  }
   const audioCtxRef = useRef<AudioContext | null>(null)
   const receiptModalRef = useRef<CompletedSale | null>(null)
 
@@ -499,7 +560,17 @@ export default function ShitjetPage() {
       </div>
 
       {/* ── Content area ── */}
-      <div className="flex-1 min-h-0 overflow-hidden flex lg:grid lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_500px]">
+      <div
+        ref={contentRef}
+        className="flex-1 min-h-0 overflow-hidden flex lg:grid lg:grid-cols-[minmax(0,1fr)_var(--cart-w,400px)] xl:grid-cols-[minmax(0,1fr)_var(--cart-w,500px)]"
+        // min() keeps a saved width from crowding out the products if the
+        // window is later made narrower.
+        style={
+          cartWidth
+            ? ({ '--cart-w': `min(${cartWidth}px, calc(100% - ${PRODUCTS_MIN_WIDTH}px))` } as React.CSSProperties)
+            : undefined
+        }
+      >
 
         {/* ── Left: Product Search ── */}
         <div
@@ -640,10 +711,20 @@ export default function ShitjetPage() {
 
         {/* ── Right: Cart ── */}
         <div
-          className={`flex-col bg-white overflow-hidden w-full lg:w-auto ${
+          className={`relative flex-col bg-white overflow-hidden w-full lg:w-auto ${
             mobileTab === 'products' ? 'hidden lg:flex' : 'flex'
           }`}
         >
+          {/* Drag to resize; double-click restores the default width. */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Ndrysho gjerësinë e shportës"
+            title="Tërhiq për të ndryshuar gjerësinë · dy klikime për ta rikthyer"
+            onPointerDown={startCartResize}
+            onDoubleClick={resetCartWidth}
+            className="hidden lg:block absolute left-0 top-0 bottom-0 w-1.5 z-20 cursor-col-resize hover:bg-blue-300/60 active:bg-blue-400/60 transition-colors"
+          />
           <div className="px-4 sm:px-5 py-4 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <RiShoppingCartLine className="text-xl text-slate-600" />
