@@ -57,19 +57,51 @@ export interface SequenceCheck {
   ok: boolean
 }
 
+/**
+ * Ceiling on the unzipped size. A real snapshot is a few MB at most; this
+ * stops a small crafted .gz from expanding into gigabytes in memory.
+ */
+const MAX_UNZIPPED_BYTES = 128 * 1024 * 1024
+
+/**
+ * Parses a gzipped snapshot — from Storage or from an uploaded file. Only the
+ * envelope is checked here; `plan` checks the contents against the schema.
+ */
+export function parseSnapshot(gz: Buffer): SnapshotFile {
+  let text: string
+  try {
+    text = gunzipSync(gz, { maxOutputLength: MAX_UNZIPPED_BYTES }).toString('utf8')
+  } catch {
+    throw new ApiFailure('Skedari nuk është .json.gz i vlefshëm (ose është shumë i madh)', 400, 'VALIDATION')
+  }
+  let snapshot: SnapshotFile
+  try {
+    snapshot = JSON.parse(text) as SnapshotFile
+  } catch {
+    throw new ApiFailure('Skedari nuk përmban JSON të vlefshëm', 400, 'VALIDATION')
+  }
+  if (
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    snapshot.format !== SNAPSHOT_FORMAT ||
+    snapshot.version !== SNAPSHOT_VERSION ||
+    typeof snapshot.createdAt !== 'string' ||
+    typeof snapshot.columns !== 'object' ||
+    typeof snapshot.tables !== 'object' ||
+    typeof snapshot.rowCounts !== 'object'
+  ) {
+    throw new ApiFailure('Skedari nuk është snapshot i Market OS', 400, 'VALIDATION')
+  }
+  return snapshot
+}
+
 export async function loadSnapshot(path: string): Promise<SnapshotFile> {
   const bucket = await backupBucket()
   const { data, error } = await bucket.download(path)
   if (error || !data) {
     throw new ApiFailure(`Snapshot-i nuk u shkarkua: ${error?.message ?? 'bosh'}`, 404, 'NOT_FOUND')
   }
-  const snapshot = JSON.parse(
-    gunzipSync(Buffer.from(await data.arrayBuffer())).toString('utf8')
-  ) as SnapshotFile
-  if (snapshot.format !== SNAPSHOT_FORMAT || snapshot.version !== SNAPSHOT_VERSION) {
-    throw new ApiFailure('Skedari nuk është snapshot i Market OS', 400, 'VALIDATION')
-  }
-  return snapshot
+  return parseSnapshot(Buffer.from(await data.arrayBuffer()))
 }
 
 interface Plan {
@@ -98,13 +130,34 @@ async function plan(db: Db, snapshot: SnapshotFile): Promise<Plan> {
     if (!tables.includes(t)) problems.push(`Tabela ${t} nuk ekziston më në bazë`)
   }
   for (const t of tables.filter((t) => snapTables.includes(t))) {
+    const declared: unknown = snapshot.columns[t]
+    if (!Array.isArray(declared) || !declared.every((c) => typeof c === 'string')) {
+      problems.push(`Kolonat e tabelës ${t} mungojnë në snapshot`)
+      continue
+    }
     const a = live[t].join(',')
-    const b = [...snapshot.columns[t]].sort().join(',')
+    const b = [...declared].sort().join(',')
     if (a !== b) problems.push(`Kolonat e tabelës ${t} kanë ndryshuar që nga snapshot-i`)
     const rows = snapshot.tables?.[t]
     if (!Array.isArray(rows)) problems.push(`Të dhënat e tabelës ${t} mungojnë`)
-    else if (rows.length !== snapshot.rowCounts?.[t]) {
-      problems.push(`Numri i rreshtave të ${t} nuk përputhet me metadata-t`)
+    else {
+      if (rows.length !== snapshot.rowCounts?.[t]) {
+        problems.push(`Numri i rreshtave të ${t} nuk përputhet me metadata-t`)
+      }
+      // Every row must carry exactly the declared columns. Snapshots we wrote
+      // always do; an edited file might not, and json_populate_recordset would
+      // quietly fill a missing key with NULL.
+      if (a === b) {
+        const names = live[t].map((c) => c.slice(0, c.lastIndexOf(':'))).sort().join(',')
+        const bad = rows.findIndex(
+          (r) =>
+            !r ||
+            typeof r !== 'object' ||
+            Array.isArray(r) ||
+            Object.keys(r).sort().join(',') !== names
+        )
+        if (bad >= 0) problems.push(`Rreshti ${bad + 1} i tabelës ${t} nuk ka kolonat e duhura`)
+      }
     }
   }
 
@@ -226,7 +279,19 @@ export interface RestorePreview {
 }
 
 export async function previewRestore(path: string, admin: RestoringAdmin): Promise<RestorePreview> {
-  const snapshot = await loadSnapshot(path)
+  return previewSnapshot(await loadSnapshot(path), path, admin)
+}
+
+/**
+ * `label` names the source in results and in the pre-restore snapshot's
+ * metadata: a Storage path, or "upload:<file name>" for an uploaded file.
+ */
+export async function previewSnapshot(
+  snapshot: SnapshotFile,
+  label: string,
+  admin: RestoringAdmin
+): Promise<RestorePreview> {
+  const path = label
   const { order, problems } = await plan(prisma, snapshot)
   return {
     path,
@@ -263,7 +328,16 @@ export interface RestoreResult {
  * which is harmless.
  */
 export async function restoreSnapshot(path: string, admin: RestoringAdmin): Promise<RestoreResult> {
-  const snapshot = await loadSnapshot(path)
+  return restoreFrom(await loadSnapshot(path), path, admin)
+}
+
+/** The restore itself, for a snapshot from Storage or from an uploaded file. */
+export async function restoreFrom(
+  snapshot: SnapshotFile,
+  label: string,
+  admin: RestoringAdmin
+): Promise<RestoreResult> {
+  const path = label
   const { order, problems } = await plan(prisma, snapshot)
   if (problems.length > 0) {
     throw new ApiFailure(`Rikthimi u refuzua: ${problems.join('; ')}`, 409, 'CONFLICT')
@@ -357,8 +431,17 @@ async function schemaExists(db: Db, schema: string): Promise<boolean> {
  * Public row counts are taken before and after as evidence.
  */
 export async function dryRunRestore(path: string, admin: RestoringAdmin): Promise<DryRunResult> {
+  return dryRunFrom(await loadSnapshot(path), path, admin)
+}
+
+/** The dry run itself, for a snapshot from Storage or from an uploaded file. */
+export async function dryRunFrom(
+  snapshot: SnapshotFile,
+  label: string,
+  admin: RestoringAdmin
+): Promise<DryRunResult> {
   const S = DRY_RUN_SCHEMA
-  const snapshot = await loadSnapshot(path)
+  const path = label
   const { order, fks, problems } = await plan(prisma, snapshot)
   if (problems.length > 0) {
     throw new ApiFailure(`Prova u refuzua: ${problems.join('; ')}`, 409, 'CONFLICT')

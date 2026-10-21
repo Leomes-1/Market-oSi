@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Modal from '@/components/ui/Modal'
@@ -14,6 +14,7 @@ import {
   RiHistoryLine,
   RiMailSendLine,
   RiSaveLine,
+  RiUploadLine,
 } from 'react-icons/ri'
 
 type Kind = 'auto' | 'manual' | 'pre-restore'
@@ -91,6 +92,17 @@ interface RestoreResult {
 }
 
 const CONFIRM_WORD = 'RIKTHE'
+
+/** Matches the server's cap, which sits under Vercel's 4.5 MB body limit. */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+
+interface UploadPreview extends Preview {
+  fileName: string
+  kind: string
+}
+
+/** The steps of "Ngarko backup", strictly in this order. */
+type UploadStep = 'checking' | 'checked' | 'dry-running' | 'dry-run' | 'restoring' | 'restored'
 
 /** Albanian names, in the order the counts are shown. */
 const TABLE_LABELS: Record<string, string> = {
@@ -185,6 +197,16 @@ export default function BackupPage() {
   const [confirmText, setConfirmText] = useState('')
   const [restoring, setRestoring] = useState(false)
   const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null)
+
+  // Ngarko backup
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadStep, setUploadStep] = useState<UploadStep>('checking')
+  const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null)
+  const [uploadDryRun, setUploadDryRun] = useState<DryRun | null>(null)
+  const [uploadResult, setUploadResult] = useState<RestoreResult | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadConfirm, setUploadConfirm] = useState('')
 
   const [dryRunTarget, setDryRunTarget] = useState<Snapshot | null>(null)
   const [dryRun, setDryRun] = useState<DryRun | null>(null)
@@ -332,6 +354,78 @@ export default function BackupPage() {
     }
   }
 
+  const postUpload = async (file: File, mode: 'preview' | 'dry-run' | 'restore', confirm?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('mode', mode)
+    if (confirm) form.append('confirm', confirm)
+    const res = await fetch('/api/backups/upload', { method: 'POST', body: form })
+    if (!res.ok) throw new Error(await readError(res, 'Kërkesa dështoi'))
+    return res.json()
+  }
+
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // so picking the same file again still fires
+    if (!file) return
+    setUploadFile(file)
+    setUploadStep('checking')
+    setUploadPreview(null)
+    setUploadDryRun(null)
+    setUploadResult(null)
+    setUploadConfirm('')
+    setUploadError(null)
+    if (!/\.json\.gz$/i.test(file.name)) {
+      setUploadError('Skedari duhet të jetë .json.gz (i shkarkuar nga “Shkarko” ose nga email-i).')
+      return
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadError('Skedari është më i madh se 4 MB.')
+      return
+    }
+    try {
+      setUploadPreview(await postUpload(file, 'preview'))
+      setUploadStep('checked')
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Kontrolli i skedarit dështoi')
+    }
+  }
+
+  const runUploadDryRun = async () => {
+    if (!uploadFile) return
+    setUploadStep('dry-running')
+    setUploadError(null)
+    try {
+      setUploadDryRun(await postUpload(uploadFile, 'dry-run'))
+      setUploadStep('dry-run')
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Prova dështoi')
+      setUploadStep('checked')
+    }
+  }
+
+  // Offered only after a passing dry run of this same file.
+  const runUploadRestore = async () => {
+    if (!uploadFile || uploadConfirm !== CONFIRM_WORD || !uploadDryRun?.ok) return
+    setUploadStep('restoring')
+    setUploadError(null)
+    try {
+      const result: RestoreResult = await postUpload(uploadFile, 'restore', uploadConfirm)
+      setUploadResult(result)
+      setUploadStep('restored')
+      toast.success(result.verified ? 'Të dhënat u rikthyen' : 'U rikthye, por verifikimi ka mospërputhje')
+      await fetchStatus()
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Rikthimi dështoi')
+      setUploadStep('dry-run')
+    }
+  }
+
+  const closeUpload = () => {
+    if (uploadStep === 'dry-running' || uploadStep === 'restoring') return
+    setUploadFile(null)
+  }
+
   if (!role || role !== 'admin') return <AccessDenied />
 
   return (
@@ -341,6 +435,21 @@ export default function BackupPage() {
         subtitle="Kopje automatike të të gjitha të dhënave, me mundësi rikthimi në çdo pikë"
         action={
           <div className="flex flex-wrap gap-2">
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".gz,application/gzip"
+              className="hidden"
+              onChange={handleFilePicked}
+            />
+            <button
+              onClick={() => fileInput.current?.click()}
+              disabled={!status?.configured}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
+              <RiUploadLine />
+              Ngarko backup
+            </button>
             <button
               onClick={handleEmail}
               disabled={emailing || !status?.configured || !status?.emailConfigured}
@@ -548,6 +657,133 @@ export default function BackupPage() {
         )}
       </Modal>
 
+      {/* Ngarko backup: check → dry run → RIKTHE */}
+      <Modal
+        isOpen={uploadFile !== null}
+        onClose={closeUpload}
+        title={uploadFile ? `Ngarko backup — ${uploadFile.name}` : ''}
+        size="lg"
+      >
+        <div className="space-y-4 text-sm">
+          {uploadStep === 'checking' && !uploadError && (
+            <p className="text-slate-400">Duke kontrolluar skedarin...</p>
+          )}
+
+          {uploadPreview && uploadStep !== 'restored' && (
+            <>
+              <p className="text-slate-600">
+                Snapshot nga <strong>{formatDateTime(uploadPreview.createdAt)}</strong>
+                {KIND_LABELS[uploadPreview.kind as Kind] && (
+                  <> · {KIND_LABELS[uploadPreview.kind as Kind].label}</>
+                )}
+                . Krahasuar me të dhënat e tanishme:
+              </p>
+              <CountsTable
+                columns={['Tani', 'Në skedar']}
+                tables={tableNames(uploadPreview.current, uploadPreview.snapshot)}
+                values={[uploadPreview.current, uploadPreview.snapshot]}
+                showDiff
+              />
+              {uploadPreview.problems.length > 0 ? (
+                <div className="rounded-lg bg-red-50 p-3 text-red-700">
+                  <p className="font-semibold mb-1">Ky skedar nuk mund të rikthehet:</p>
+                  <ul className="list-disc pl-5">
+                    {uploadPreview.problems.map((p) => (
+                      <li key={p}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-emerald-700">
+                  ✓ Formati, tabelat dhe kolonat përputhen me skemën aktuale.
+                </p>
+              )}
+            </>
+          )}
+
+          {uploadDryRun && uploadStep !== 'restored' && (
+            <div className="border-t border-slate-100 pt-4">
+              <p className="font-semibold text-slate-800 mb-2">Prova (dry run)</p>
+              <DryRunReport dryRun={uploadDryRun} />
+            </div>
+          )}
+
+          {uploadError && <p className="text-red-600 break-words">{uploadError}</p>}
+
+          {uploadPreview && uploadPreview.problems.length === 0 && !uploadDryRun && (
+            <div className="flex gap-3">
+              <button onClick={closeUpload} disabled={uploadStep === 'dry-running'} className="btn-secondary flex-1">
+                Anulo
+              </button>
+              <button
+                onClick={runUploadDryRun}
+                disabled={uploadStep === 'dry-running'}
+                className="btn-primary flex-1 flex items-center justify-center gap-2"
+              >
+                <RiFlaskLine />
+                {uploadStep === 'dry-running' ? 'Duke provuar...' : 'Bëj provën (dry run)'}
+              </button>
+            </div>
+          )}
+
+          {uploadDryRun?.ok && uploadStep !== 'restored' && (
+            <div className="border-t border-slate-100 pt-4 space-y-3">
+              <p className="text-slate-600">
+                Rikthimi zëvendëson të gjitha të dhënat e dyqanit me ato të skedarit. Para tij ruhet
+                automatikisht një snapshot “Para rikthimit”. Llogaritë e hyrjes nuk preken.
+              </p>
+              <p className="text-slate-500">{ADMIN_ACTION_LABELS[uploadDryRun.adminAction]}</p>
+              <div>
+                <label className="label">
+                  Shkruaj <strong>{CONFIRM_WORD}</strong> për të konfirmuar
+                </label>
+                <input
+                  value={uploadConfirm}
+                  onChange={(e) => setUploadConfirm(e.target.value)}
+                  className="input"
+                  autoComplete="off"
+                  disabled={uploadStep === 'restoring'}
+                />
+              </div>
+              <div className="flex gap-3">
+                <button onClick={closeUpload} disabled={uploadStep === 'restoring'} className="btn-secondary flex-1">
+                  Anulo
+                </button>
+                <button
+                  onClick={runUploadRestore}
+                  disabled={uploadConfirm !== CONFIRM_WORD || uploadStep === 'restoring'}
+                  className="btn-danger flex-1 disabled:opacity-50"
+                >
+                  {uploadStep === 'restoring' ? 'Duke rikthyer...' : 'Rikthe nga skedari'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {uploadResult && (
+            <>
+              <p className={uploadResult.verified ? 'text-emerald-700 font-medium' : 'text-red-700 font-medium'}>
+                {uploadResult.verified
+                  ? 'Rikthimi përfundoi dhe numri i rreshtave u verifikua.'
+                  : 'Rikthimi përfundoi, por verifikimi pas tij gjeti mospërputhje.'}
+              </p>
+              <CountsTable
+                columns={['Para', 'Pas']}
+                tables={tableNames(uploadResult.before, uploadResult.after)}
+                values={[uploadResult.before, uploadResult.after]}
+              />
+              <p className="text-slate-500">
+                Gjendja e mëparshme u ruajt si snapshot “Para rikthimit” (
+                {formatDateTime(uploadResult.preRestore.createdAt)}), që mund ta rikthesh po ashtu.
+              </p>
+              <button onClick={closeUpload} className="btn-secondary w-full">
+                Mbyll
+              </button>
+            </>
+          )}
+        </div>
+      </Modal>
+
       {/* Dry run */}
       <Modal
         isOpen={dryRunTarget !== null}
@@ -562,32 +798,7 @@ export default function BackupPage() {
             Duke rikthyer në skemën e përkohshme restore_test... Tabelat reale nuk preken.
           </p>
         ) : (
-          <div className="space-y-4 text-sm">
-            <p className={dryRun.ok ? 'text-emerald-700 font-medium' : 'text-red-700 font-medium'}>
-              {dryRun.ok
-                ? 'Prova kaloi: ky snapshot mund të rikthehet.'
-                : 'Prova gjeti probleme — mos e rikthe këtë snapshot pa i kontrolluar.'}
-            </p>
-            <CountsTable
-              columns={['Në snapshot', 'Pritet', 'U rikthye']}
-              tables={tableNames(dryRun.snapshot, dryRun.restored)}
-              values={[dryRun.snapshot, dryRun.expected, dryRun.restored]}
-            />
-            <ul className="space-y-1 text-slate-600">
-              <Check ok={dryRun.countsMatch} text="Numri i rreshtave përputhet" />
-              <Check ok={dryRun.sequencesOk} text="Sekuencat e ID-ve janë pas ID-së më të madhe" />
-              <Check ok={dryRun.schemaDropped} text="Skema restore_test u fshi" />
-              <Check
-                ok={dryRun.publicUnchanged}
-                text={
-                  dryRun.publicUnchanged
-                    ? 'Tabelat reale nuk ndryshuan'
-                    : 'Tabelat reale ndryshuan gjatë provës (shitje të reja?)'
-                }
-              />
-            </ul>
-            <p className="text-slate-500">{ADMIN_ACTION_LABELS[dryRun.adminAction]}</p>
-          </div>
+          <DryRunReport dryRun={dryRun} />
         )}
       </Modal>
     </div>
@@ -695,6 +906,37 @@ function CountsTable({
         })}
       </tbody>
     </table>
+  )
+}
+
+function DryRunReport({ dryRun }: { dryRun: DryRun }) {
+  return (
+    <div className="space-y-4 text-sm">
+      <p className={dryRun.ok ? 'text-emerald-700 font-medium' : 'text-red-700 font-medium'}>
+        {dryRun.ok
+          ? 'Prova kaloi: ky snapshot mund të rikthehet.'
+          : 'Prova gjeti probleme — mos e rikthe këtë snapshot pa i kontrolluar.'}
+      </p>
+      <CountsTable
+        columns={['Në snapshot', 'Pritet', 'U rikthye']}
+        tables={tableNames(dryRun.snapshot, dryRun.restored)}
+        values={[dryRun.snapshot, dryRun.expected, dryRun.restored]}
+      />
+      <ul className="space-y-1 text-slate-600">
+        <Check ok={dryRun.countsMatch} text="Numri i rreshtave përputhet" />
+        <Check ok={dryRun.sequencesOk} text="Sekuencat e ID-ve janë pas ID-së më të madhe" />
+        <Check ok={dryRun.schemaDropped} text="Skema restore_test u fshi" />
+        <Check
+          ok={dryRun.publicUnchanged}
+          text={
+            dryRun.publicUnchanged
+              ? 'Tabelat reale nuk ndryshuan'
+              : 'Tabelat reale ndryshuan gjatë provës (shitje të reja?)'
+          }
+        />
+      </ul>
+      <p className="text-slate-500">{ADMIN_ACTION_LABELS[dryRun.adminAction]}</p>
+    </div>
   )
 }
 
