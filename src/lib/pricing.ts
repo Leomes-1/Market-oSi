@@ -141,6 +141,83 @@ export async function lockProduct(tx: Tx, productId: number) {
   await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${productId} FOR UPDATE`
 }
 
+/**
+ * Takes `sasia` units of one product and returns its priced columns, read
+ * under the row lock — the sale path's single statement per line.
+ *
+ * Tracked stock: the conditional decrement `sasia >= n` is the guard, the
+ * write and the row lock in one atomic statement, exactly like the
+ * updateMany it replaces (so stock still cannot go below zero, and the CHECK
+ * constraint stays the backstop). RETURNING hands back the row as it stands
+ * after the decrement, which is what the separate re-read used to fetch.
+ * `updatedAt` is set the way Prisma's updateMany set it.
+ *
+ * Untracked (kg): nothing to decrement, so SELECT … FOR UPDATE takes the lock
+ * and reads in one go.
+ *
+ * Returns null when there was not enough stock (no row matched the guard).
+ */
+export async function takeAndLock(
+  tx: Tx,
+  productId: number,
+  sasia: number,
+  tracked: boolean
+): Promise<PricedProduct | null> {
+  const rows = tracked
+    ? await tx.$queryRaw<PricedProduct[]>`
+        UPDATE "Product"
+           SET sasia = sasia - ${sasia}::double precision,
+               -- Stored as UTC wall time, like Prisma's own writes, whatever
+               -- the session time zone is.
+               "updatedAt" = (${new Date().toISOString()}::timestamptz AT TIME ZONE 'UTC')
+         WHERE id = ${productId}
+           AND sasia >= ${sasia}::double precision
+     RETURNING id, sasia, "cmimiBlerjes", "cmimiShitjes",
+               "cmimiBlerjesRi", "cmimiShitjesRi", "sasiaVjeter"
+      `
+    : await tx.$queryRaw<PricedProduct[]>`
+        SELECT id, sasia, "cmimiBlerjes", "cmimiShitjes",
+               "cmimiBlerjesRi", "cmimiShitjesRi", "sasiaVjeter"
+          FROM "Product"
+         WHERE id = ${productId}
+           FOR UPDATE
+      `
+  return rows[0] ?? null
+}
+
+/**
+ * `applyConsumption` in one statement instead of two, for a row this
+ * transaction already locked and read (`locked`, from takeAndLock).
+ *
+ * Same result: draw `sasiaVjeter` down, and when that reaches zero promote
+ * the pending prices and clear the three columns. SET expressions all see the
+ * row as it was before this UPDATE, so `"sasiaVjeter" - n <= 0` is exactly the
+ * old second statement's `GREATEST(0, "sasiaVjeter" - n) <= 0`.
+ *
+ * No pending change (`sasiaVjeter` null) means both old statements matched no
+ * row, so nothing is sent at all. The lock guarantees nobody else changed it
+ * since `locked` was read.
+ */
+export async function applyConsumptionLocked(tx: Tx, locked: PricedProduct, sasia: number) {
+  if (locked.sasiaVjeter == null) return
+
+  await tx.$executeRaw`
+    UPDATE "Product"
+       SET "cmimiBlerjes"   = CASE WHEN "sasiaVjeter" - ${sasia}::double precision <= 0
+                                   THEN COALESCE("cmimiBlerjesRi", "cmimiBlerjes") ELSE "cmimiBlerjes" END,
+           "cmimiShitjes"   = CASE WHEN "sasiaVjeter" - ${sasia}::double precision <= 0
+                                   THEN COALESCE("cmimiShitjesRi", "cmimiShitjes") ELSE "cmimiShitjes" END,
+           "cmimiBlerjesRi" = CASE WHEN "sasiaVjeter" - ${sasia}::double precision <= 0
+                                   THEN NULL ELSE "cmimiBlerjesRi" END,
+           "cmimiShitjesRi" = CASE WHEN "sasiaVjeter" - ${sasia}::double precision <= 0
+                                   THEN NULL ELSE "cmimiShitjesRi" END,
+           "sasiaVjeter"    = CASE WHEN "sasiaVjeter" - ${sasia}::double precision <= 0
+                                   THEN NULL ELSE GREATEST(0, "sasiaVjeter" - ${sasia}::double precision) END
+     WHERE id = ${locked.id}
+       AND "sasiaVjeter" IS NOT NULL
+  `
+}
+
 export interface PriceUpdate {
   cmimiBlerjes: number
   /** Omitted when the delivery did not change the sale price. */

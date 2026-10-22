@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { tracksStock, validateQuantity, weightForAmount } from '@/lib/validation'
-import { applyConsumption, lockProduct, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { applyConsumptionLocked, priceConsumption, takeAndLock } from '@/lib/pricing'
 import { stripProfitFromSales } from '@/lib/sale-visibility'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
@@ -182,38 +182,26 @@ export async function POST(req: NextRequest) {
       }> = []
 
       for (const line of validated) {
-        if (line.tracked) {
-          // Conditional decrement: the `sasia: { gte }` guard and the write are
-          // a single atomic statement, so two tills selling the last unit cannot
-          // both succeed and stock can never be driven below zero. It also takes
-          // the row lock, which is what makes the re-read below consistent.
-          const updated = await tx.product.updateMany({
-            where: { id: line.productId, sasia: { gte: line.sasia } },
-            data: { sasia: { decrement: line.sasia } },
-          })
-          if (updated.count !== 1) {
-            const current = byId.get(line.productId)
-            throw new ApiFailure(
-              `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
-              409,
-              'INSUFFICIENT_STOCK'
-            )
-          }
-        } else {
-          // Stock is not counted, so nothing to decrement — take the row lock
-          // explicitly instead, for the same consistent re-read.
-          await lockProduct(tx, line.productId)
+        // One statement: for tracked stock the conditional decrement (the
+        // `sasia >= n` guard and the write are atomic, so two tills selling the
+        // last unit cannot both succeed and stock can never go below zero);
+        // for kg lines a plain row lock. Either way it returns the row as
+        // committed under the lock — prices and pending-change counters are
+        // the current values, not what a concurrent sale saw earlier.
+        const locked = await takeAndLock(tx, line.productId, line.sasia, line.tracked)
+        if (!locked) {
+          // Only a tracked line can miss: the guard found too little stock.
+          const current = byId.get(line.productId)
+          throw new ApiFailure(
+            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
         }
 
-        // Re-read under the lock: prices and the pending-change counters must
-        // be the committed values, not what a concurrent sale saw earlier.
-        const locked = await tx.product.findUniqueOrThrow({
-          where: { id: line.productId },
-          select: PRICED_PRODUCT_SELECT,
-        })
-
         const pricing = priceConsumption(locked, line.sasia)
-        await applyConsumption(tx, line.productId, line.sasia)
+        // Skipped entirely when no price change is pending.
+        await applyConsumptionLocked(tx, locked, line.sasia)
 
         // An amount line charges exactly what was typed. The stored unit price
         // is the effective one (amount ÷ weight), so every place that shows
@@ -235,15 +223,30 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      return tx.sale.create({
+      // Three statements instead of one INSERT per line plus three reads:
+      // the header, all lines in one INSERT … RETURNING, and the products as
+      // they now stand. Assembled into the same shape as
+      // `include: { items: { include: { product: true } } }` returned.
+      const header = await tx.sale.create({
         data: {
           totali,
           fitimi,
           shenime: typeof shenime === 'string' && shenime.trim() ? shenime.trim() : null,
-          items: { create: itemData },
         },
-        include: { items: { include: { product: true } } },
       })
+      const items = await tx.saleItem.createManyAndReturn({
+        data: itemData.map((item) => ({ ...item, saleId: header.id })),
+      })
+      const after = new Map(
+        (await tx.product.findMany({ where: { id: { in: itemData.map((i) => i.productId) } } })).map(
+          (p) => [p.id, p]
+        )
+      )
+
+      return {
+        ...header,
+        items: items.map((item) => ({ ...item, product: after.get(item.productId)! })),
+      }
     })
 
     scheduleSnapshot()
