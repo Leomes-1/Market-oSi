@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
@@ -7,6 +8,35 @@ import { isLowStock } from '@/lib/utils'
 export const dynamic = 'force-dynamic'
 
 const MONTH_NAMES = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj']
+
+/**
+ * A JS Date as the UTC wall-clock `timestamp` Prisma stores DateTime columns
+ * in, so raw comparisons match Prisma's own whatever the session time zone.
+ */
+function ts(d: Date) {
+  return Prisma.sql`(${d.toISOString()}::timestamptz AT TIME ZONE 'UTC')`
+}
+
+/** Bucket boundaries for width_bucket(), as the same UTC timestamps. */
+function tsArray(ds: Date[]) {
+  return Prisma.sql`ARRAY(SELECT unnest(${ds.map((d) => d.toISOString())}::timestamptz[]) AT TIME ZONE 'UTC')`
+}
+
+interface SaleSummaryRow {
+  periudha_totali: number | null
+  periudha_fitimi: number | null
+  periudha_numri: number
+  periudha_produkte: number | null
+  muaji_totali: number | null
+  muaji_fitimi: number | null
+  sot_totali: number | null
+  muaji_kaluar_totali: number | null
+  dje_totali: number | null
+  /** [{ b: bucket 1–30, shitjet, fitimi }] — one per day that had sales. */
+  ditor: Array<{ b: number; shitjet: number; fitimi: number }> | null
+  /** [{ b: bucket 1–12, shitjet, fitimi }] — one per month that had sales. */
+  mujor: Array<{ b: number; shitjet: number; fitimi: number }> | null
+}
 
 export async function GET(request: NextRequest) {
   const { error } = await requireRole(['admin'])
@@ -49,56 +79,60 @@ export async function GET(request: NextRequest) {
         periodStart = todayStart
     }
 
+    // Day and month buckets for the charts. Their boundaries are computed
+    // here, in the server's local time exactly as the labels below are, and
+    // passed in — so SQL never has to agree with Node about the time zone.
+    const dayStarts = Array.from(
+      { length: 31 },
+      (_, i) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29 + i)
+    ) // 30 days + tomorrow's start as the upper bound
+    const monthStarts = Array.from(
+      { length: 13 },
+      (_, i) => new Date(now.getFullYear(), now.getMonth() - 11 + i, 1)
+    ) // 12 months + next month's start
+
     const [
-      periodSales,
-      monthSales,
-      todaySalesRaw,
+      saleSummary,
       allProducts,
       suppliersCount,
-      chartDailyRaw,
-      chartMonthlyRaw,
-      prevMonthSales,
-      yesterdaySales,
       topPeriodProducts,
       recentSales,
       personalUsePeriod,
       personalUseMonth,
     ] = await Promise.all([
-      prisma.sale.findMany({
-        where: { createdAt: { gte: periodStart, lt: periodEnd } },
-        select: { totali: true, fitimi: true, items: { select: { sasia: true } } },
-      }),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: monthStart, lt: tomorrowStart } },
-        select: { totali: true, fitimi: true },
-      }),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: todayStart, lt: tomorrowStart } },
-        select: { totali: true, fitimi: true },
-      }),
+      // Every Sale figure on the dashboard in one statement: conditional
+      // sums for the KPIs, and width_bucket groupings for the two charts.
+      // It replaces seven findMany calls that each fetched rows to sum in JS.
+      prisma.$queryRaw<SaleSummaryRow[]>`
+        WITH s AS (
+          SELECT id, "createdAt" AS at, totali, fitimi FROM "Sale"
+        )
+        SELECT
+          SUM(totali) FILTER (WHERE at >= ${ts(periodStart)} AND at < ${ts(periodEnd)})      AS periudha_totali,
+          SUM(fitimi) FILTER (WHERE at >= ${ts(periodStart)} AND at < ${ts(periodEnd)})      AS periudha_fitimi,
+          (COUNT(*) FILTER (WHERE at >= ${ts(periodStart)} AND at < ${ts(periodEnd)}))::int  AS periudha_numri,
+          (SELECT SUM(si.sasia) FROM "SaleItem" si JOIN s p ON p.id = si."saleId"
+            WHERE p.at >= ${ts(periodStart)} AND p.at < ${ts(periodEnd)})                   AS periudha_produkte,
+          SUM(totali) FILTER (WHERE at >= ${ts(monthStart)} AND at < ${ts(tomorrowStart)})   AS muaji_totali,
+          SUM(fitimi) FILTER (WHERE at >= ${ts(monthStart)} AND at < ${ts(tomorrowStart)})   AS muaji_fitimi,
+          SUM(totali) FILTER (WHERE at >= ${ts(todayStart)} AND at < ${ts(tomorrowStart)})   AS sot_totali,
+          SUM(totali) FILTER (WHERE at >= ${ts(prevMonthStart)} AND at < ${ts(monthStart)})  AS muaji_kaluar_totali,
+          SUM(totali) FILTER (WHERE at >= ${ts(yesterdayStart)} AND at < ${ts(todayStart)})  AS dje_totali,
+          (SELECT json_agg(json_build_object('b', b, 'shitjet', t, 'fitimi', f))
+             FROM (SELECT width_bucket(at, ${tsArray(dayStarts)}) AS b, SUM(totali) AS t, SUM(fitimi) AS f
+                     FROM s WHERE at >= ${ts(last30Start)} AND at < ${ts(tomorrowStart)}
+                    GROUP BY 1) d)                                                           AS ditor,
+          (SELECT json_agg(json_build_object('b', b, 'shitjet', t, 'fitimi', f))
+             FROM (SELECT width_bucket(at, ${tsArray(monthStarts)}) AS b, SUM(totali) AS t, SUM(fitimi) AS f
+                     FROM s WHERE at >= ${ts(last12Start)} AND at < ${ts(tomorrowStart)}
+                    GROUP BY 1) m)                                                           AS mujor
+        FROM s
+      `,
       prisma.product.findMany({
         select: { id: true, emri: true, sasia: true, stokuMinimal: true, kategoria: true, njesia: true },
         orderBy: { emri: 'asc' },
       }),
       prisma.supplier.count(),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: last30Start, lt: tomorrowStart } },
-        select: { totali: true, fitimi: true, createdAt: true },
-        orderBy: { createdAt: 'asc' },
-      }),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: last12Start, lt: tomorrowStart } },
-        select: { totali: true, fitimi: true, createdAt: true },
-        orderBy: { createdAt: 'asc' },
-      }),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: prevMonthStart, lt: monthStart } },
-        select: { totali: true },
-      }),
-      prisma.sale.findMany({
-        where: { createdAt: { gte: yesterdayStart, lt: todayStart } },
-        select: { totali: true },
-      }),
       prisma.saleItem
         .groupBy({
           by: ['productId', 'emriProduktit'],
@@ -126,19 +160,18 @@ export async function GET(request: NextRequest) {
       }),
     ])
 
+    const sum = saleSummary[0]
+
     // Period KPI
-    const periudhaTotali = periodSales.reduce((s, x) => s + x.totali, 0)
-    const periudhaFitimi = periodSales.reduce((s, x) => s + x.fitimi, 0)
-    const periudhaNumri = periodSales.length
-    const periudhaProdukte = periodSales.reduce(
-      (s, x) => s + x.items.reduce((is, i) => is + i.sasia, 0),
-      0
-    )
+    const periudhaTotali = sum.periudha_totali ?? 0
+    const periudhaFitimi = sum.periudha_fitimi ?? 0
+    const periudhaNumri = sum.periudha_numri
+    const periudhaProdukte = sum.periudha_produkte ?? 0
 
     // Fixed KPIs
-    const shitjetSotTotali = todaySalesRaw.reduce((s, x) => s + x.totali, 0)
-    const shitjetMuajitTotali = monthSales.reduce((s, x) => s + x.totali, 0)
-    const shitjetMuajitFitimi = monthSales.reduce((s, x) => s + x.fitimi, 0)
+    const shitjetSotTotali = sum.sot_totali ?? 0
+    const shitjetMuajitTotali = sum.muaji_totali ?? 0
+    const shitjetMuajitFitimi = sum.muaji_fitimi ?? 0
 
     // Low stock
     const lowStockProducts = allProducts
@@ -146,49 +179,28 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => a.sasia / a.stokuMinimal - b.sasia / b.stokuMinimal)
       .slice(0, 8)
 
-    // Daily chart — last 30 days
-    const dailyMap = new Map<string, { shitjet: number; fitimi: number }>()
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
-      const key = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
-      dailyMap.set(key, { shitjet: 0, fitimi: 0 })
-    }
-    for (const sale of chartDailyRaw) {
-      const d = new Date(sale.createdAt)
-      const key = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
-      const entry = dailyMap.get(key)
-      if (entry) {
-        entry.shitjet += sale.totali
-        entry.fitimi += sale.fitimi
+    // Daily chart — last 30 days. width_bucket's bucket b (1-based) is the
+    // day starting at dayStarts[b - 1].
+    const dailyBuckets = new Map((sum.ditor ?? []).map((r) => [r.b, r]))
+    const chartDitor = dayStarts.slice(0, 30).map((d, i) => {
+      const v = dailyBuckets.get(i + 1)
+      return {
+        data: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`,
+        shitjet: Math.round(v?.shitjet ?? 0),
+        fitimi: Math.round(v?.fitimi ?? 0),
       }
-    }
-    const chartDitor = Array.from(dailyMap.entries()).map(([data, v]) => ({
-      data,
-      shitjet: Math.round(v.shitjet),
-      fitimi: Math.round(v.fitimi),
-    }))
+    })
 
     // Monthly chart — last 12 months
-    const monthlyMap = new Map<string, { muaj: string; shitjet: number; fitimi: number }>()
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      const key = `${d.getFullYear()}-${d.getMonth()}`
-      monthlyMap.set(key, { muaj: MONTH_NAMES[d.getMonth()], shitjet: 0, fitimi: 0 })
-    }
-    for (const sale of chartMonthlyRaw) {
-      const d = new Date(sale.createdAt)
-      const key = `${d.getFullYear()}-${d.getMonth()}`
-      const entry = monthlyMap.get(key)
-      if (entry) {
-        entry.shitjet += sale.totali
-        entry.fitimi += sale.fitimi
+    const monthlyBuckets = new Map((sum.mujor ?? []).map((r) => [r.b, r]))
+    const chartMujor = monthStarts.slice(0, 12).map((d, i) => {
+      const v = monthlyBuckets.get(i + 1)
+      return {
+        muaj: MONTH_NAMES[d.getMonth()],
+        shitjet: Math.round(v?.shitjet ?? 0),
+        fitimi: Math.round(v?.fitimi ?? 0),
       }
-    }
-    const chartMujor = Array.from(monthlyMap.values()).map((v) => ({
-      muaj: v.muaj,
-      shitjet: Math.round(v.shitjet),
-      fitimi: Math.round(v.fitimi),
-    }))
+    })
 
     // Top products formatted
     const topProducts = topPeriodProducts.map((p) => ({
@@ -211,7 +223,7 @@ export async function GET(request: NextRequest) {
       insights.push({ type: 'warning', text: `Stoku po mbaron për ${p.emri} (${p.sasia} njësi të mbetura)` })
     }
 
-    const prevMonthTotal = prevMonthSales.reduce((s, x) => s + x.totali, 0)
+    const prevMonthTotal = sum.muaji_kaluar_totali ?? 0
     if (prevMonthTotal > 0 && shitjetMuajitTotali > 0) {
       const diff = ((shitjetMuajitTotali - prevMonthTotal) / prevMonthTotal) * 100
       if (Math.abs(diff) >= 5) {
@@ -223,7 +235,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const yesterdayTotal = yesterdaySales.reduce((s, x) => s + x.totali, 0)
+    const yesterdayTotal = sum.dje_totali ?? 0
     if (yesterdayTotal > 0 && shitjetSotTotali > 0) {
       const diff = ((shitjetSotTotali - yesterdayTotal) / yesterdayTotal) * 100
       if (Math.abs(diff) >= 10) {
