@@ -3,7 +3,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { createClient } from '@/lib/supabase/client'
 import { useRole } from '@/contexts/RoleContext'
 import { Role, ROLE_LABELS } from '@/lib/roles'
 import toast from 'react-hot-toast'
@@ -50,8 +49,14 @@ export default function Sidebar({ onClose }: SidebarProps) {
   if (pathname === '/login') return null
 
   const handleLogout = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    // Server-side sign-out (api/auth/logout): keeps the Supabase browser
+    // library out of the layout every page loads. Like the browser call it
+    // replaced, a failure still continues to the login page.
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // Offline — the login page is still the right place to land.
+    }
     toast.success('U largove me sukses')
     router.push('/login')
     router.refresh()
