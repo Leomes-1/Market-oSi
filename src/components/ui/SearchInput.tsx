@@ -112,7 +112,9 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(function Sea
     }
     if (e.key === 'Enter') {
       e.preventDefault()
-      const trimmed = value.trim()
+      // Read the field itself, not the `value` prop: a scanner types the code
+      // and Enter in one burst, and the DOM always has every character.
+      const trimmed = e.currentTarget.value.trim()
       if (trimmed && onSubmit) onSubmit(trimmed)
       if (selectOnScan) replaceNext.current = true
       return

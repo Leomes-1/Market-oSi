@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { memo, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
-import { useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { lookupBarcode, useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
 import { tracksStock, weightForAmount } from '@/lib/validation'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
@@ -88,6 +88,101 @@ function saveCartWidth(width: number | null) {
 function isWeighted(njesia: string) {
   return njesia === 'kg' || njesia === 'gram' || njesia === 'litër'
 }
+
+// Flags a product whose new prices are waiting for the old stock to sell
+// through, e.g. "120 L → 100 L pas 2 copëve".
+function pendingFor(p: CatalogProduct) {
+  return pendingLabel(
+    {
+      id: p.id,
+      sasia: p.sasia,
+      cmimiBlerjes: p.cmimiBlerjes ?? 0,
+      cmimiShitjes: p.cmimiShitjes,
+      cmimiBlerjesRi: p.cmimiBlerjesRi ?? null,
+      cmimiShitjesRi: p.cmimiShitjesRi,
+      sasiaVjeter: p.sasiaVjeter,
+    },
+    p.njesia
+  )
+}
+
+interface ProductGridProps {
+  products: Product[]
+  cart: CartItem[]
+  onAdd: (product: Product) => void
+  /** Show "nothing found" when the list is empty because of a search. */
+  showEmpty: boolean
+}
+
+/**
+ * The product tiles. Memoised on its props, so typing a barcode — one state
+ * update per character from a scanner — no longer re-renders ~600 tiles per
+ * keystroke; only the cart or the search result changing does.
+ */
+const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty }: ProductGridProps) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
+      {products.map((product) => {
+        const inCart = cart.find((i) => i.product.id === product.id)
+        const tracked = tracksStock(product.njesia)
+        const outOfStock = tracked && product.sasia <= 0
+        const pending = pendingFor(product)
+        return (
+          <motion.button
+            key={product.id}
+            whileHover={!outOfStock ? { scale: 1.01 } : {}}
+            whileTap={!outOfStock ? { scale: 0.98 } : {}}
+            onClick={() => !outOfStock && onAdd(product)}
+            disabled={outOfStock}
+            className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
+              outOfStock
+                ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
+                : inCart
+                ? 'border-blue-400 bg-blue-50'
+                : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm active:scale-95'
+            }`}
+          >
+            <div className="flex items-start justify-between mb-1.5 sm:mb-2">
+              <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
+              {inCart && (
+                <span className="badge-blue ml-1 flex-shrink-0 text-xs">
+                  {!tracked
+                    ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
+                    : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
+            {pending && (
+              <p className="text-xs text-amber-600 mb-1.5 leading-tight">
+                ⏳ {pending}
+              </p>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-sm sm:text-base font-bold text-slate-900">
+                {formatCurrency(product.cmimiShitjes)}
+              </span>
+              {tracked ? (
+                <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
+                  {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
+                </span>
+              ) : (
+                <span className="text-xs font-medium hidden sm:block text-slate-400">
+                  / {product.njesia}
+                </span>
+              )}
+            </div>
+          </motion.button>
+        )
+      })}
+      {products.length === 0 && showEmpty && (
+        <div className="col-span-full text-center py-12 text-slate-400">
+          Nuk u gjet asnjë produkt
+        </div>
+      )}
+    </div>
+  )
+})
 
 export default function ShitjetPage() {
   const { role } = useRole()
@@ -240,30 +335,61 @@ export default function ShitjetPage() {
     }
   }
 
+  // One timer for the scan feedback, so an earlier scan's timeout can't wipe
+  // the message of the scan after it.
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   function triggerFlash(type: 'success' | 'error', message: string, duration = 1000) {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
     setScanFlash(type)
     setScanMessage(message)
     playBeep(type)
     vibrateDevice(type === 'success' ? 50 : [80, 50, 80])
-    setTimeout(() => {
+    flashTimerRef.current = setTimeout(() => {
       setScanFlash(null)
       setScanMessage('')
     }, duration)
   }
+
+  // The cart as last rendered, for a scan that resolves after a server lookup:
+  // by then the closure's `cart` may be several scans old.
+  const cartRef = useRef(cart)
+  cartRef.current = cart
 
   function handleBarcodeSubmit(code: string) {
     // Clear immediately so the next scan can start even while this one is
     // still being processed.
     setBarkodi('')
 
+    // Normal path: the cached catalogue, in memory — no request.
     const product = findByBarcode(code)
-
-    if (!product) {
-      triggerFlash('error', 'Produkti nuk u gjet', 1500)
-      barcodeRef.current?.focus()
+    if (product) {
+      addScanned(product)
       return
     }
 
+    // Not in the cache: possibly a product added on another device since this
+    // page loaded. One lookup on the server before calling it unknown.
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+    setScanFlash(null)
+    setScanMessage('Duke kërkuar...')
+    lookupBarcode(code).then(
+      (found) => {
+        if (found) {
+          addScanned(found)
+        } else {
+          triggerFlash('error', 'Produkti nuk u gjet', 1500)
+          barcodeRef.current?.focus()
+        }
+      },
+      () => {
+        triggerFlash('error', 'Gabim gjatë kërkimit të barkodit', 1500)
+        barcodeRef.current?.focus()
+      }
+    )
+  }
+
+  function addScanned(product: Product) {
     if (!tracksStock(product.njesia)) {
       addAmountLine(product)
       triggerFlash('success', `${product.emri} — shkruaj shumën`, 900)
@@ -278,7 +404,7 @@ export default function ShitjetPage() {
     }
 
     const step = isWeighted(product.njesia) ? 1.0 : 1
-    const currentInCart = cart.find((i) => i.product.id === product.id)
+    const currentInCart = cartRef.current.find((i) => i.product.id === product.id)
     const newSasia = currentInCart
       ? parseFloat((currentInCart.sasia + step).toFixed(3))
       : isWeighted(product.njesia)
@@ -372,6 +498,11 @@ export default function ShitjetPage() {
     setKerkimi('')
     barcodeRef.current?.focus()
   }
+
+  // Stable identity for the memoised grid; always calls the current addToCart.
+  const addToCartRef = useRef(addToCart)
+  addToCartRef.current = addToCart
+  const onAddProduct = useCallback((product: Product) => addToCartRef.current(product), [])
 
   function updateSasia(productId: number, delta: number) {
     setRawValues((prev) => {
@@ -479,23 +610,6 @@ export default function ShitjetPage() {
     if (raw !== undefined) return raw
     if (!tracksStock(item.product.njesia)) return item.shuma == null ? '' : String(item.shuma)
     return isWeighted(item.product.njesia) ? item.sasia.toFixed(3) : item.sasia.toString()
-  }
-
-  // Flags a product whose new prices are waiting for the old stock to sell
-  // through, e.g. "120 L → 100 L pas 2 copëve".
-  function pendingFor(p: CatalogProduct) {
-    return pendingLabel(
-      {
-        id: p.id,
-        sasia: p.sasia,
-        cmimiBlerjes: p.cmimiBlerjes ?? 0,
-        cmimiShitjes: p.cmimiShitjes,
-        cmimiBlerjesRi: p.cmimiBlerjesRi ?? null,
-        cmimiShitjesRi: p.cmimiShitjesRi,
-        sasiaVjeter: p.sasiaVjeter,
-      },
-      p.njesia
-    )
   }
 
   const totali = cart.reduce((sum, i) => sum + lineTotal(i), 0)
@@ -653,7 +767,11 @@ export default function ShitjetPage() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
                     className={`text-xs mt-1.5 font-medium pl-1 ${
-                      scanFlash === 'success' ? 'text-green-600' : 'text-red-500'
+                      scanFlash === 'success'
+                        ? 'text-green-600'
+                        : scanFlash === 'error'
+                        ? 'text-red-500'
+                        : 'text-slate-500'
                     }`}
                   >
                     {scanMessage}
@@ -689,65 +807,12 @@ export default function ShitjetPage() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
-                {filteredProducts.map((product) => {
-                  const inCart = cart.find((i) => i.product.id === product.id)
-                  const tracked = tracksStock(product.njesia)
-                  const outOfStock = tracked && product.sasia <= 0
-                  return (
-                    <motion.button
-                      key={product.id}
-                      whileHover={!outOfStock ? { scale: 1.01 } : {}}
-                      whileTap={!outOfStock ? { scale: 0.98 } : {}}
-                      onClick={() => !outOfStock && addToCart(product)}
-                      disabled={outOfStock}
-                      className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
-                        outOfStock
-                          ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
-                          : inCart
-                          ? 'border-blue-400 bg-blue-50'
-                          : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm active:scale-95'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-1.5 sm:mb-2">
-                        <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
-                        {inCart && (
-                          <span className="badge-blue ml-1 flex-shrink-0 text-xs">
-                            {!tracked
-                              ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
-                              : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
-                      {pendingFor(product) && (
-                        <p className="text-xs text-amber-600 mb-1.5 leading-tight">
-                          ⏳ {pendingFor(product)}
-                        </p>
-                      )}
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm sm:text-base font-bold text-slate-900">
-                          {formatCurrency(product.cmimiShitjes)}
-                        </span>
-                        {tracked ? (
-                          <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
-                            {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
-                          </span>
-                        ) : (
-                          <span className="text-xs font-medium hidden sm:block text-slate-400">
-                            / {product.njesia}
-                          </span>
-                        )}
-                      </div>
-                    </motion.button>
-                  )
-                })}
-                {filteredProducts.length === 0 && kerkimi && (
-                  <div className="col-span-full text-center py-12 text-slate-400">
-                    Nuk u gjet asnjë produkt
-                  </div>
-                )}
-              </div>
+              <ProductGrid
+                products={filteredProducts}
+                cart={cart}
+                onAdd={onAddProduct}
+                showEmpty={!!kerkimi}
+              />
             )}
           </div>
         </div>
