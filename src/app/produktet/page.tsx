@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
-import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
@@ -12,7 +11,7 @@ import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
 import { tracksStock } from '@/lib/validation'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -305,12 +304,10 @@ export default function ProduktetPage() {
                 {safeProducts.map((product, idx) => {
                   const lowStock = isLowStock(product.sasia, product.stokuMinimal, product.njesia)
                   return (
-                    <motion.tr
+                    <tr
                       key={product.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: rowDelay(idx) }}
-                      className="table-row"
+                      style={rowDelayStyle(idx)}
+                      className="table-row anim-fade-in"
                     >
                       <td className="table-td">
                         <span className="font-medium text-slate-900">{product.emri}</span>
@@ -380,7 +377,7 @@ export default function ProduktetPage() {
                           )}
                         </div>
                       </td>
-                    </motion.tr>
+                    </tr>
                   )
                 })}
               </tbody>

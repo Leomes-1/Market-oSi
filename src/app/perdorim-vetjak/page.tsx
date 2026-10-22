@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
@@ -12,7 +11,8 @@ import ErrorState from '@/components/ui/ErrorState'
 import Modal from '@/components/ui/Modal'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle } from '@/lib/animation'
+import Collapse from '@/components/ui/Collapse'
 import { isWeightedUnit, tracksStock } from '@/lib/validation'
 import {
   RiHomeHeartLine,
@@ -539,12 +539,10 @@ export default function PerdorimVetjakPage() {
                 {entries.map((e, idx) => {
                   const open = expanded.has(e.id)
                   return (
-                    <motion.tr
+                    <tr
                       key={e.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: rowDelay(idx) }}
-                      className="table-row align-top"
+                      style={rowDelayStyle(idx)}
+                      className="table-row align-top anim-fade-in"
                     >
                       <td className="table-td">
                         <button
@@ -569,30 +567,21 @@ export default function PerdorimVetjakPage() {
                             ? e.items[0].emriProduktit
                             : `${e.items.length} produkte`}
                         </button>
-                        <AnimatePresence initial={false}>
-                          {open && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="overflow-hidden"
-                            >
-                              <ul className="mt-2 space-y-1 border-l-2 border-slate-100 pl-3">
-                                {e.items.map((it) => (
-                                  <li
-                                    key={it.id}
-                                    className="flex items-baseline justify-between gap-4 text-sm"
-                                  >
-                                    <span className="text-slate-600">{it.emriProduktit}</span>
-                                    <span className="text-slate-400 tabular-nums whitespace-nowrap">
-                                      {it.sasia} {it.njesia} · {formatCurrency(it.totali)}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                        <Collapse open={open}>
+                          <ul className="mt-2 space-y-1 border-l-2 border-slate-100 pl-3">
+                            {e.items.map((it) => (
+                              <li
+                                key={it.id}
+                                className="flex items-baseline justify-between gap-4 text-sm"
+                              >
+                                <span className="text-slate-600">{it.emriProduktit}</span>
+                                <span className="text-slate-400 tabular-nums whitespace-nowrap">
+                                  {it.sasia} {it.njesia} · {formatCurrency(it.totali)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </Collapse>
                       </td>
                       <td className="table-td text-right tabular-nums font-medium">
                         {formatCurrency(e.totali)}
@@ -607,7 +596,7 @@ export default function PerdorimVetjakPage() {
                           <RiDeleteBin6Line className="text-lg" />
                         </button>
                       </td>
-                    </motion.tr>
+                    </tr>
                   )
                 })}
               </tbody>

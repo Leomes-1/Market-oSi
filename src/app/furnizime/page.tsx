@@ -5,12 +5,11 @@ import Link from 'next/link'
 import { useEffect, useState, useCallback } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
-import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatCurrency, formatDate, toArray } from '@/lib/utils'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle } from '@/lib/animation'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -215,12 +214,10 @@ export default function FurnizimePage() {
               </thead>
               <tbody>
                 {filteredSupplies.map((supply, idx) => (
-                  <motion.tr
+                  <tr
                     key={supply.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: rowDelay(idx) }}
-                    className="table-row"
+                    style={rowDelayStyle(idx)}
+                    className="table-row anim-fade-in"
                   >
                     <td className="table-td font-mono font-semibold text-blue-600">
                       #{supply.id}
@@ -265,7 +262,7 @@ export default function FurnizimePage() {
                         <RiDeleteBin6Line className="text-lg" />
                       </button>
                     </td>
-                  </motion.tr>
+                  </tr>
                 ))}
               </tbody>
             </table>

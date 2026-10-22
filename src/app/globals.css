@@ -121,3 +121,34 @@ body {
     @apply border-b border-slate-100 hover:bg-slate-50 transition-colors duration-100;
   }
 }
+
+/*
+ * Entry animations, in plain CSS — they replaced framer-motion, which put
+ * ~36 kB (gzipped) of JavaScript on almost every page for these fades.
+ *
+ * Each runs once when the element mounts, like framer's initial → animate.
+ * `backwards` applies the first frame during an animation-delay (rows are
+ * staggered via inline animationDelay, see lib/animation rowDelay) but not
+ * after the end, so hover transforms still work once the entry has finished.
+ */
+@keyframes anim-fade-in {
+  from { opacity: 0; }
+}
+@keyframes anim-fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+}
+@keyframes anim-fade-up-sm {
+  from { opacity: 0; transform: translateY(10px); }
+}
+@keyframes anim-slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+}
+@keyframes anim-grow-width {
+  from { width: 0; }
+}
+
+.anim-fade-in { animation: anim-fade-in 0.3s ease-out backwards; }
+.anim-fade-up { animation: anim-fade-up 0.3s ease-out backwards; }
+.anim-fade-up-sm { animation: anim-fade-up-sm 0.3s ease-out backwards; }
+.anim-slide-in-right { animation: anim-slide-in-right 0.15s ease-out backwards; }
+.anim-grow-width { animation: anim-grow-width 0.6s ease-out 0.1s backwards; }

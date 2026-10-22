@@ -1,13 +1,12 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import { ROLE_LABELS, Role } from '@/lib/roles'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle } from '@/lib/animation'
 import { RiShieldUserLine, RiTeamLine } from 'react-icons/ri'
 
 interface UserEntry {
@@ -127,12 +126,10 @@ export default function PerdoruesitPage() {
               </thead>
               <tbody>
                 {users.map((user, idx) => (
-                  <motion.tr
+                  <tr
                     key={user.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: rowDelay(idx) }}
-                    className="table-row"
+                    style={rowDelayStyle(idx)}
+                    className="table-row anim-fade-in"
                   >
                     <td className="table-td font-mono text-slate-400 text-xs">{idx + 1}</td>
                     <td className="table-td font-medium text-slate-800">{user.email}</td>
@@ -158,7 +155,7 @@ export default function PerdoruesitPage() {
                     <td className="table-td text-slate-400 text-xs">
                       {new Date(user.createdAt).toLocaleDateString('sq-AL')}
                     </td>
-                  </motion.tr>
+                  </tr>
                 ))}
               </tbody>
             </table>

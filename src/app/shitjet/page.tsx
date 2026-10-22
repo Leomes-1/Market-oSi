@@ -3,7 +3,7 @@
 import { memo, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
-import { motion, AnimatePresence } from 'framer-motion'
+import { usePresence } from '@/lib/animation'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
@@ -128,18 +128,16 @@ const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty
         const outOfStock = tracked && product.sasia <= 0
         const pending = pendingFor(product)
         return (
-          <motion.button
+          <button
             key={product.id}
-            whileHover={!outOfStock ? { scale: 1.01 } : {}}
-            whileTap={!outOfStock ? { scale: 0.98 } : {}}
             onClick={() => !outOfStock && onAdd(product)}
             disabled={outOfStock}
             className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
               outOfStock
                 ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
                 : inCart
-                ? 'border-blue-400 bg-blue-50'
-                : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm active:scale-95'
+                ? 'border-blue-400 bg-blue-50 hover:scale-[1.01] active:scale-[0.98]'
+                : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]'
             }`}
           >
             <div className="flex items-start justify-between mb-1.5 sm:mb-2">
@@ -172,7 +170,7 @@ const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty
                 </span>
               )}
             </div>
-          </motion.button>
+          </button>
         )
       })}
       {products.length === 0 && showEmpty && (
@@ -203,6 +201,11 @@ export default function ShitjetPage() {
   const [barkodi, setBarkodi] = useState('')
   const [scanFlash, setScanFlash] = useState<'success' | 'error' | null>(null)
   const [scanMessage, setScanMessage] = useState('')
+  // The message keeps its text and colour while it fades out.
+  const scanMessagePresence = usePresence(!!scanMessage, 300)
+  const shownScanMessageRef = useRef<{ text: string; tone: typeof scanFlash }>({ text: '', tone: null })
+  if (scanMessage) shownScanMessageRef.current = { text: scanMessage, tone: scanFlash }
+  const shownScanMessage = shownScanMessageRef.current
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products')
   const barcodeRef = useRef<SearchInputHandle>(null)
   const amountRefs = useRef<Map<number, HTMLInputElement>>(new Map())
@@ -760,24 +763,25 @@ export default function ShitjetPage() {
                   )
                 }
               />
-              <AnimatePresence>
-                {scanMessage && (
-                  <motion.p
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className={`text-xs mt-1.5 font-medium pl-1 ${
-                      scanFlash === 'success'
-                        ? 'text-green-600'
-                        : scanFlash === 'error'
-                        ? 'text-red-500'
-                        : 'text-slate-500'
-                    }`}
-                  >
-                    {scanMessage}
-                  </motion.p>
-                )}
-              </AnimatePresence>
+              {scanMessagePresence.mounted && (
+                <p
+                  className={`text-xs mt-1.5 font-medium pl-1 transition-[opacity,transform] duration-300 ease-out ${
+                    scanMessagePresence.phase === 'entering'
+                      ? 'opacity-0 -translate-y-1'
+                      : scanMessagePresence.phase === 'leaving'
+                      ? 'opacity-0'
+                      : 'opacity-100'
+                  } ${
+                    shownScanMessage.tone === 'success'
+                      ? 'text-green-600'
+                      : shownScanMessage.tone === 'error'
+                      ? 'text-red-500'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  {shownScanMessage.text}
+                </p>
+              )}
             </div>
 
             {/* Product Name / Category Search */}
@@ -844,8 +848,7 @@ export default function ShitjetPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto min-h-0">
-            <AnimatePresence>
-              {cart.length === 0 ? (
+            {cart.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-slate-400 py-16">
                   <RiShoppingCartLine className="text-5xl mb-3 text-slate-200" />
                   <p className="text-sm">Shporta është bosh</p>
@@ -854,17 +857,13 @@ export default function ShitjetPage() {
               ) : (
                 <div className="divide-y divide-slate-100">
                   {cart.map((item) => (
-                    <motion.div
+                    <div
                       key={item.product.id}
                       ref={(el: HTMLDivElement | null) => {
                         if (el) lineRefs.current.set(item.product.id, el)
                         else lineRefs.current.delete(item.product.id)
                       }}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.15 }}
-                      className={`px-4 py-3 sm:px-4 scroll-my-2 transition-colors duration-500 ${
+                      className={`px-4 py-3 sm:px-4 scroll-my-2 transition-colors duration-500 anim-slide-in-right ${
                         highlightId === item.product.id ? 'bg-blue-100' : 'bg-white'
                       }`}
                     >
@@ -956,11 +955,10 @@ export default function ShitjetPage() {
                           </span>
                         </div>
                       )}
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               )}
-            </AnimatePresence>
           </div>
 
           {/* Cart Summary */}

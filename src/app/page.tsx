@@ -2,10 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import dynamic from 'next/dynamic'
-import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
 import { formatCurrency, formatDateTime, formatPercent, marginPercent } from '@/lib/utils'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle, usePresence } from '@/lib/animation'
 import ExportButtons from '@/components/ui/ExportButtons'
 import AccessDenied from '@/components/AccessDenied'
 import { useRole } from '@/contexts/RoleContext'
@@ -103,14 +102,8 @@ const PROFIT_LABELS: Record<Periudha, string> = {
   custom: 'Fitimi i Periudhës',
 }
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 16 },
-  show: (i: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: rowDelay(i, 0.06), duration: 0.3, ease: 'easeOut' },
-  }),
-}
+/** Staggered fade-up entry (globals.css `anim-fade-up`) for card `i`. */
+const fadeUp = (i: number) => rowDelayStyle(i, 0.06)
 
 export default function Dashboard() {
   const { role } = useRole()
@@ -121,6 +114,7 @@ export default function Dashboard() {
   const [nga, setNga] = useState('')
   const [deri, setDeri] = useState('')
   const [showCustom, setShowCustom] = useState(false)
+  const customPicker = usePresence(showCustom, 300)
 
   const fetchDashboard = useCallback(
     (p: Periudha = periudha, silent = false) => {
@@ -248,13 +242,11 @@ export default function Dashboard() {
           </button>
         ))}
 
-        <AnimatePresence>
-          {showCustom && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="flex items-center gap-2 flex-wrap"
+        {customPicker.mounted && (
+            <div
+              className={`flex items-center gap-2 flex-wrap transition-[opacity,transform] duration-300 ease-out ${
+                customPicker.phase === 'entered' ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
+              }`}
             >
               <input
                 type="date"
@@ -275,9 +267,8 @@ export default function Dashboard() {
               >
                 Kërko
               </button>
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
       </div>
 
       {/* 7 KPI Cards */}
@@ -360,7 +351,7 @@ export default function Dashboard() {
 
       {/* Reorder suggestions card */}
       {(data?.lowStockCount ?? 0) > 0 && (
-        <motion.div variants={fadeUp} custom={6} initial="hidden" animate="show">
+        <div style={fadeUp(6)} className="anim-fade-up">
           <Link
             href="/porositje-te-sugjeruara"
             className="card flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors group border-l-4 border-l-amber-400"
@@ -383,12 +374,12 @@ export default function Dashboard() {
               <RiArrowRightLine className="text-slate-400 group-hover:text-blue-600 transition-colors text-lg" />
             </div>
           </Link>
-        </motion.div>
+        </div>
       )}
 
       {/* Charts Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <motion.div variants={fadeUp} custom={6} initial="hidden" animate="show" className="card">
+        <div style={fadeUp(6)} className="card anim-fade-up">
           <div className="px-5 py-4 border-b border-slate-100">
             <h2 className="font-semibold text-slate-900">Shitjet Ditore</h2>
             <p className="text-xs text-slate-400 mt-0.5">30 ditët e fundit</p>
@@ -396,9 +387,9 @@ export default function Dashboard() {
           <div className="p-4 pt-5">
             <DailySalesChart data={data?.chartDitor ?? []} />
           </div>
-        </motion.div>
+        </div>
 
-        <motion.div variants={fadeUp} custom={7} initial="hidden" animate="show" className="card">
+        <div style={fadeUp(7)} className="card anim-fade-up">
           <div className="px-5 py-4 border-b border-slate-100">
             <h2 className="font-semibold text-slate-900">Shitjet Mujore</h2>
             <p className="text-xs text-slate-400 mt-0.5">12 muajt e fundit</p>
@@ -406,18 +397,15 @@ export default function Dashboard() {
           <div className="p-4 pt-5">
             <MonthlySalesChart data={data?.chartMujor ?? []} />
           </div>
-        </motion.div>
+        </div>
       </div>
 
       {/* Charts Row 2 + Insights */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Top products chart */}
-        <motion.div
-          variants={fadeUp}
-          custom={8}
-          initial="hidden"
-          animate="show"
-          className="card lg:col-span-2"
+        <div
+          style={fadeUp(8)}
+          className="card lg:col-span-2 anim-fade-up"
         >
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
             <div>
@@ -429,15 +417,12 @@ export default function Dashboard() {
           <div className="p-4 pt-5">
             <TopProductsChart data={data?.topProducts ?? []} />
           </div>
-        </motion.div>
+        </div>
 
         {/* Business insights */}
-        <motion.div
-          variants={fadeUp}
-          custom={9}
-          initial="hidden"
-          animate="show"
-          className="card"
+        <div
+          style={fadeUp(9)}
+          className="card anim-fade-up"
         >
           <div className="px-5 py-4 border-b border-slate-100">
             <h2 className="font-semibold text-slate-900">Njohuri Biznesi</h2>
@@ -455,12 +440,12 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-        </motion.div>
+        </div>
       </div>
 
       {/* Low stock bars */}
       {data?.lowStockProducts && data.lowStockProducts.length > 0 && (
-        <motion.div variants={fadeUp} custom={10} initial="hidden" animate="show" className="card">
+        <div style={fadeUp(10)} className="card anim-fade-up">
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h2 className="font-semibold text-slate-900">Stok i Ulët</h2>
@@ -484,11 +469,9 @@ export default function Dashboard() {
                     <span className="text-xs text-slate-400 whitespace-nowrap">{p.sasia}/{p.stokuMinimal}</span>
                   </div>
                   <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${pct}%` }}
-                      transition={{ duration: 0.6, delay: 0.1 }}
-                      className={`h-full rounded-full ${color}`}
+                    <div
+                      style={{ width: `${pct}%` }}
+                      className={`h-full rounded-full ${color} anim-grow-width`}
                     />
                   </div>
                   <p className="text-xs text-slate-400">{p.kategoria}</p>
@@ -496,11 +479,11 @@ export default function Dashboard() {
               )
             })}
           </div>
-        </motion.div>
+        </div>
       )}
 
       {/* Recent sales */}
-      <motion.div variants={fadeUp} custom={11} initial="hidden" animate="show" className="card">
+      <div style={fadeUp(11)} className="card anim-fade-up">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-900">Shitjet e Fundit</h2>
           <Link
@@ -547,7 +530,7 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-      </motion.div>
+      </div>
     </div>
   )
 }
@@ -579,13 +562,9 @@ interface KpiCardProps {
 function KpiCard({ index, title, value, sub, icon, color, trend }: KpiCardProps) {
   const c = kpiColorMap[color]
   return (
-    <motion.div
-      variants={fadeUp}
-      custom={index}
-      initial="hidden"
-      animate="show"
-      whileHover={{ y: -3, transition: { duration: 0.15 } }}
-      className={`card p-5 border-l-4 ${c.border}`}
+    <div
+      style={fadeUp(index)}
+      className={`card p-5 border-l-4 ${c.border} anim-fade-up transition-transform duration-150 hover:-translate-y-[3px]`}
     >
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
@@ -613,7 +592,7 @@ function KpiCard({ index, title, value, sub, icon, color, trend }: KpiCardProps)
           <span className={`text-xl ${c.icon}`}>{icon}</span>
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }
 

@@ -3,12 +3,11 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
-import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { toArray } from '@/lib/utils'
-import { rowDelay } from '@/lib/animation'
+import { rowDelayStyle } from '@/lib/animation'
 import CardSkeleton from '@/components/ui/CardSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -169,12 +168,10 @@ export default function FurnitoretPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {suppliers.map((supplier, idx) => (
-            <motion.div
+            <div
               key={supplier.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: rowDelay(idx) }}
-              className="card p-5 hover:shadow-md transition-shadow"
+              style={rowDelayStyle(idx)}
+              className="card p-5 hover:shadow-md transition-shadow anim-fade-up-sm"
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
@@ -244,7 +241,7 @@ export default function FurnitoretPage() {
                   <p className="text-xs text-slate-500 italic">{supplier.shenime}</p>
                 </div>
               )}
-            </motion.div>
+            </div>
           ))}
         </div>
       )}

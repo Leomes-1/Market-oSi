@@ -1,7 +1,5 @@
 'use client'
 
-import { motion } from 'framer-motion'
-
 interface StatsCardProps {
   title: string
   value: string | number
@@ -43,11 +41,7 @@ export default function StatsCard({ title, value, subtitle, icon, color = 'blue'
   const colors = colorMap[color]
 
   return (
-    <motion.div
-      whileHover={{ y: -2 }}
-      transition={{ duration: 0.15 }}
-      className="card p-5"
-    >
+    <div className="card p-5 transition-transform duration-150 hover:-translate-y-0.5">
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-slate-500 truncate">{title}</p>
@@ -67,6 +61,6 @@ export default function StatsCard({ title, value, subtitle, icon, color = 'blue'
           <span className={`text-xl ${colors.icon}`}>{icon}</span>
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }
