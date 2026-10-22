@@ -46,6 +46,8 @@ interface Status {
   configured: boolean
   problem: string | null
   snapshots: Snapshot[]
+  /** Every snapshot, when `snapshots` is the capped newest-first list. */
+  total?: number
   lastFailure: Failure | null
   lastEmail: EmailStatus | null
   emailConfigured: boolean
@@ -188,6 +190,8 @@ export default function BackupPage() {
   const { role } = useRole()
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
+  // The list is capped to the newest snapshots unless asked for all.
+  const [showAll, setShowAll] = useState(false)
   const [creating, setCreating] = useState(false)
   const [emailing, setEmailing] = useState(false)
 
@@ -215,7 +219,7 @@ export default function BackupPage() {
   const fetchStatus = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/backups')
+      const res = await fetch(showAll ? '/api/backups?all=1' : '/api/backups')
       if (!res.ok) throw new Error(await readError(res, 'Gabim gjatë ngarkimit të backup-eve'))
       setStatus(await res.json())
     } catch (error) {
@@ -223,7 +227,7 @@ export default function BackupPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [showAll])
 
   useEffect(() => {
     fetchStatus()
@@ -515,7 +519,7 @@ export default function BackupPage() {
             <strong className="text-slate-800">{latest ? formatDateTime(latest.createdAt) : 'asnjë'}</strong>
           </span>
           <span>
-            Gjithsej: <strong className="text-slate-800">{status.snapshots.length}</strong>
+            Gjithsej: <strong className="text-slate-800">{status.total ?? status.snapshots.length}</strong>
           </span>
           <span>
             Email-i i fundit:{' '}
@@ -564,6 +568,13 @@ export default function BackupPage() {
                 ))}
               </tbody>
             </table>
+            {status && (status.total ?? 0) > status.snapshots.length && (
+              <div className="p-4 text-center border-t border-slate-100">
+                <button onClick={() => setShowAll(true)} className="btn-secondary">
+                  Shfaq të gjitha ({status.total})
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

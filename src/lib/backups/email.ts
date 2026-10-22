@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer'
-import { backupBucket, listSnapshots, type SnapshotEntry } from './storage'
+import { backupBucket, listSnapshots, readStatusFile, writeStatusFile, type SnapshotEntry } from './storage'
 import { takeSnapshot } from './snapshot'
 
 /**
@@ -42,24 +42,12 @@ export function isEmailConfigured(): boolean {
 }
 
 export async function readEmailStatus(): Promise<EmailStatus | null> {
-  const bucket = await backupBucket()
-  const { data, error } = await bucket.download(STATUS_PATH)
-  if (error || !data) return null
-  try {
-    return JSON.parse(await data.text()) as EmailStatus
-  } catch {
-    return null
-  }
+  return readStatusFile<EmailStatus>(STATUS_PATH)
 }
 
 async function writeEmailStatus(status: EmailStatus): Promise<void> {
   try {
-    const bucket = await backupBucket()
-    const { error } = await bucket.upload(STATUS_PATH, JSON.stringify(status), {
-      contentType: 'application/json',
-      upsert: true,
-    })
-    if (error) throw error
+    await writeStatusFile(STATUS_PATH, status)
   } catch (error) {
     console.error('Backup email: could not record the status:', error)
   }

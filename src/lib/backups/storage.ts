@@ -117,6 +117,72 @@ export async function listSnapshots(db: Db = prisma, limit?: number): Promise<Sn
   }))
 }
 
+/** How many snapshots exist, for the page's total when the list is capped. */
+export async function countSnapshots(db: Db = prisma): Promise<number> {
+  const rows = await db.$queryRaw<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM storage.objects
+    WHERE bucket_id = ${BUCKET} AND name LIKE 'snapshots/%'`
+  return rows[0]?.n ?? 0
+}
+
+/**
+ * A small JSON status file (last failure, last email), read without
+ * downloading it.
+ *
+ * Writers store the same JSON as the object's user metadata (see
+ * `writeStatusFile`), so one query on storage.objects returns it — no Storage
+ * HTTP request on every visit to the backup page. A file written before that
+ * has no metadata yet; it is downloaded once as before, until its next write.
+ */
+export async function readStatusFile<T extends { at: string }>(path: string): Promise<T | null> {
+  const rows = await prisma.$queryRaw<{ user_metadata: T | null; updated_at: Date }[]>`
+    SELECT user_metadata, updated_at FROM storage.objects
+    WHERE bucket_id = ${BUCKET} AND name = ${path}`
+  if (rows.length === 0) return null
+  const meta = rows[0].user_metadata
+  // Trusted only if it was written with the file: its own `at` (set just
+  // before the upload) must not be well behind the object's last write.
+  // Otherwise — no metadata, or metadata a later upload didn't replace —
+  // read the file itself.
+  if (
+    meta &&
+    typeof meta === 'object' &&
+    typeof meta.at === 'string' &&
+    rows[0].updated_at.getTime() - new Date(meta.at).getTime() < 60_000
+  ) {
+    return meta
+  }
+
+  const bucket = await backupBucket()
+  const { data, error } = await bucket.download(path)
+  if (error || !data) return null
+  try {
+    return JSON.parse(await data.text()) as T
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Metadata travels in a request header, so a status with an unusually long
+ * error message is written without it; reading then falls back to the file.
+ */
+const MAX_STATUS_METADATA = 2_000
+
+/** Writes a status file, with its content mirrored into the user metadata. */
+export async function writeStatusFile(path: string, status: { at: string }): Promise<void> {
+  const bucket = await backupBucket()
+  const json = JSON.stringify(status)
+  const { error } = await bucket.upload(path, json, {
+    contentType: 'application/json',
+    upsert: true,
+    // Empty metadata on an oversize status, so a stale copy from an
+    // earlier write can't be read back instead of the file.
+    metadata: json.length <= MAX_STATUS_METADATA ? (status as Record<string, unknown>) : {},
+  })
+  if (error) throw error
+}
+
 export async function objectExists(db: Db, path: string): Promise<boolean> {
   const rows = await db.$queryRaw<{ found: boolean }[]>`
     SELECT EXISTS (
@@ -151,24 +217,12 @@ export async function recordFailure(context: string, error: unknown): Promise<vo
       context,
       message: error instanceof Error ? error.message : String(error),
     }
-    const bucket = await backupBucket()
-    const { error: uploadError } = await bucket.upload(FAILURE_PATH, JSON.stringify(failure), {
-      contentType: 'application/json',
-      upsert: true,
-    })
-    if (uploadError) throw uploadError
+    await writeStatusFile(FAILURE_PATH, failure)
   } catch (markerError) {
     console.error('Backup: could not record the failure marker:', markerError)
   }
 }
 
 export async function readLastFailure(): Promise<BackupFailure | null> {
-  const bucket = await backupBucket()
-  const { data, error } = await bucket.download(FAILURE_PATH)
-  if (error || !data) return null
-  try {
-    return JSON.parse(await data.text()) as BackupFailure
-  } catch {
-    return null
-  }
+  return readStatusFile<BackupFailure>(FAILURE_PATH)
 }
