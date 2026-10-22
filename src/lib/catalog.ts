@@ -17,7 +17,11 @@ export type { CatalogProduct }
  * copy keeps answering every lookup until the new one has fully arrived, and
  * a failed refresh just leaves the old copy in place.
  *
- * Call `refresh()` after anything that changes products or stock.
+ * Call `refresh()` after anything that changes products or stock. The POS
+ * instead patches the rows a sale touched from the sale's own response
+ * (`patchCatalog`), and the copy revalidates in the background when a screen
+ * using it mounts or the tab comes back, at most once a minute — so other
+ * tills' sales still arrive without a full download after every sale.
  */
 
 type Listener = () => void
@@ -28,7 +32,18 @@ const EMPTY: CatalogProduct[] = []
 let cache: CatalogProduct[] | null = null
 let inflight: Promise<CatalogProduct[]> | null = null
 let lastError = false
+let loadedAt = 0
 const listeners = new Set<Listener>()
+
+/** Revalidate in the background when the copy is older than this. */
+const STALE_MS = 60_000
+
+/**
+ * Patches applied while a full load was in flight. That load may have been
+ * read before the change, so they are re-applied on top of what it returns.
+ */
+let patchSeq = 0
+let recentPatches: Array<{ seq: number; rows: CatalogPatch[] }> = []
 
 /**
  * Rows fetched one at a time by `lookupBarcode` before the full catalogue has
@@ -47,6 +62,7 @@ async function load(force: boolean): Promise<CatalogProduct[]> {
   // single request.
   if (!force && inflight) return inflight
 
+  const startedAt = patchSeq
   inflight = (async () => {
     try {
       const res = await fetch('/api/products/catalog')
@@ -65,7 +81,11 @@ async function load(force: boolean): Promise<CatalogProduct[]> {
         early.clear()
       }
       // Swapped in only now, complete — never replaced by a partial or empty copy.
-      cache = next
+      cache = recentPatches
+        .filter((p) => p.seq > startedAt)
+        .reduce((rows, p) => applyPatch(rows, p.rows), next)
+      recentPatches = []
+      loadedAt = Date.now()
       lastError = false
       return cache
     } catch {
@@ -89,7 +109,48 @@ export async function refreshCatalog(): Promise<CatalogProduct[]> {
 /** Lets non-React code (or a page that already has fresh rows) seed the cache. */
 export function primeCatalog(products: CatalogProduct[]) {
   cache = products
+  loadedAt = Date.now()
   emit()
+}
+
+/** Fields a sale can change on a product. */
+export type CatalogPatch = Pick<CatalogProduct, 'id' | 'sasia' | 'cmimiShitjes' | 'cmimiShitjesRi' | 'sasiaVjeter'> &
+  Partial<Pick<CatalogProduct, 'cmimiBlerjes' | 'cmimiBlerjesRi'>>
+
+function applyPatch(rows: CatalogProduct[], patches: CatalogPatch[]): CatalogProduct[] {
+  const byId = new Map(patches.map((p) => [p.id, p]))
+  return rows.map((row) => {
+    const patch = byId.get(row.id)
+    if (!patch) return row
+    const next: CatalogProduct = {
+      ...row,
+      sasia: patch.sasia,
+      cmimiShitjes: patch.cmimiShitjes,
+      cmimiShitjesRi: patch.cmimiShitjesRi,
+      sasiaVjeter: patch.sasiaVjeter,
+    }
+    // Cost fields only where this copy already carries them: cashiers'
+    // catalogue never has them, and a patch must not add them.
+    if ('cmimiBlerjes' in row && patch.cmimiBlerjes !== undefined) next.cmimiBlerjes = patch.cmimiBlerjes
+    if ('cmimiBlerjesRi' in row && patch.cmimiBlerjesRi !== undefined) next.cmimiBlerjesRi = patch.cmimiBlerjesRi
+    return next
+  })
+}
+
+/**
+ * Updates stock and prices of the given products in place, from data the
+ * server just returned (a completed sale), instead of refetching everything.
+ */
+export function patchCatalog(rows: CatalogPatch[]) {
+  if (rows.length === 0 || !cache) return
+  if (inflight) recentPatches.push({ seq: ++patchSeq, rows })
+  cache = applyPatch(cache, rows)
+  emit()
+}
+
+/** Background refresh if the copy is older than STALE_MS. Never blanks it. */
+function revalidateIfStale() {
+  if (cache && !inflight && Date.now() - loadedAt > STALE_MS) void load(true)
 }
 
 /** Inserts or replaces rows by id, keeping everything else as it is. */
@@ -174,9 +235,15 @@ export function useCatalog(): UseCatalog {
     }
     listeners.add(listener)
     void load(false)
+    revalidateIfStale()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') revalidateIfStale()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       mounted.current = false
       listeners.delete(listener)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 

@@ -7,7 +7,7 @@ import { usePresence } from '@/lib/animation'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
-import { lookupBarcode, useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { lookupBarcode, patchCatalog, useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
 import { tracksStock, weightForAmount } from '@/lib/validation'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
@@ -58,7 +58,17 @@ interface CompletedSale {
     sasia: number
     cmimiShitjes: number
     fitimi: number
-    product: { njesia: string } | null
+    /** The product as it stands after this sale. */
+    product: {
+      id: number
+      njesia: string
+      sasia: number
+      cmimiShitjes: number
+      cmimiShitjesRi: number | null
+      sasiaVjeter: number | null
+      cmimiBlerjes?: number
+      cmimiBlerjesRi?: number | null
+    } | null
   }>
 }
 
@@ -191,7 +201,6 @@ export default function ShitjetPage() {
     error: productsError,
     findByBarcode,
     search,
-    refresh: refreshProducts,
   } = useCatalog()
   const [kerkimi, setKerkimi] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -656,10 +665,27 @@ export default function ShitjetPage() {
         return
       }
 
-      const sale = await res.json()
+      const sale = (await res.json()) as CompletedSale
       setReceiptModal(sale)
       setCart([])
-      refreshProducts()
+      // The response carries every sold product as it now stands (stock,
+      // and prices if a pending change was promoted): update just those rows
+      // in the cached catalogue instead of downloading all of it again.
+      patchCatalog(
+        sale.items.flatMap((item) =>
+          item.product
+            ? [{
+                id: item.product.id,
+                sasia: item.product.sasia,
+                cmimiShitjes: item.product.cmimiShitjes,
+                cmimiShitjesRi: item.product.cmimiShitjesRi,
+                sasiaVjeter: item.product.sasiaVjeter,
+                cmimiBlerjes: item.product.cmimiBlerjes,
+                cmimiBlerjesRi: item.product.cmimiBlerjesRi,
+              }]
+            : []
+        )
+      )
       toast.success('Shitja u regjistrua me sukses!')
     } finally {
       setLoading(false)
