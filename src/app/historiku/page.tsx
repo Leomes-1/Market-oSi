@@ -11,6 +11,7 @@ import SearchInput from '@/components/ui/SearchInput'
 import { formatCurrency, formatDateTime, formatPercent, marginPercent, toArray } from '@/lib/utils'
 import { rowDelayStyle } from '@/lib/animation'
 import { tracksStock } from '@/lib/validation'
+import { getCatalog, refreshCatalog, type CatalogProduct } from '@/lib/catalog'
 import TableSkeleton from '@/components/ui/TableSkeleton'
 import ErrorState from '@/components/ui/ErrorState'
 import {
@@ -47,16 +48,8 @@ interface Sale {
   items: SaleItem[]
 }
 
-interface Product {
-  id: number
-  emri: string
-  kategoria: string
-  sasia: number
-  cmimiBlerjes: number
-  cmimiShitjes: number
-  njesia: string
-  barcodes: { barcode: string }[]
-}
+/** The shared catalogue row; cmimiBlerjes is absent for cashiers. */
+type Product = CatalogProduct
 
 interface EditItem {
   productId: number
@@ -127,6 +120,8 @@ export default function HistorikuPage() {
       toast.success('Fatura u fshi me sukses')
       setSaleToDelete(null)
       fetchSales()
+      // Deleting returned stock: let the cached catalogue catch up.
+      void refreshCatalog()
     } catch {
       toast.error('Fshirja dështoi')
     } finally {
@@ -154,13 +149,9 @@ export default function HistorikuPage() {
     setShowAddProduct(false)
 
     if (allProducts.length === 0) {
-      try {
-        const res = await fetch('/api/products')
-        const data = await res.json()
-        setAllProducts(toArray<Product>(data, 'products'))
-      } catch {
-        // silent
-      }
+      // The app-wide cached catalogue: no request at all if the POS or the
+      // products screen already loaded it.
+      setAllProducts(await getCatalog())
     }
   }
 
@@ -196,7 +187,9 @@ export default function HistorikuPage() {
           productId: product.id,
           emriProduktit: product.emri,
           sasia: isWeighted(product.njesia) ? 0.1 : 1,
-          cmimiBlerjes: product.cmimiBlerjes,
+          // Withheld from cashiers, who are never shown cost or profit; the
+          // PUT doesn't send it either — the server prices every line.
+          cmimiBlerjes: product.cmimiBlerjes ?? 0,
           cmimiShitjes: product.cmimiShitjes,
           njesia: product.njesia,
           availableStock: tracked ? product.sasia : Infinity,
@@ -243,6 +236,9 @@ export default function HistorikuPage() {
       toast.success('Fatura u përditësua me sukses')
       setSaleToEdit(null)
       fetchSales()
+      // The edit moved stock: let the cached catalogue catch up.
+      void refreshCatalog()
+      setAllProducts([])
     } catch {
       toast.error('Gabim gjatë ruajtjes')
     } finally {

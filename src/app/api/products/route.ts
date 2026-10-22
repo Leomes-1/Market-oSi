@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
-import { isLowStock } from '@/lib/utils'
+import { lowStockWhere } from '@/lib/low-stock'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
@@ -19,6 +19,26 @@ export async function GET(req: NextRequest) {
     const kerkimi = searchParams.get('kerkimi') || ''
     const kategoria = searchParams.get('kategoria') || ''
     const stokUlet = searchParams.get('stokUlet') === 'true'
+
+    // Low stock (the Stok i Ulët screen): filtered in SQL, and only the
+    // fields that screen shows.
+    if (stokUlet) {
+      const lowStock = await prisma.product.findMany({
+        where: lowStockWhere(),
+        select: {
+          id: true,
+          emri: true,
+          kategoria: true,
+          sasia: true,
+          stokuMinimal: true,
+          njesia: true,
+          barcodes: { select: { barcode: true } },
+          furnitor: { select: { emri: true } },
+        },
+        orderBy: { emri: 'asc' },
+      })
+      return NextResponse.json(lowStock)
+    }
 
     const products = await prisma.product.findMany({
       where: {
@@ -39,19 +59,15 @@ export async function GET(req: NextRequest) {
       orderBy: { emri: 'asc' },
     })
 
-    const filtered = stokUlet
-      ? products.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
-      : products
-
     // Cashiers work the till and have no business seeing cost prices, which
     // would let them derive the margin the receipt no longer shows them.
     if (role === 'cashier') {
       return NextResponse.json(
-        filtered.map(({ cmimiBlerjes: _cost, ...rest }) => rest)
+        products.map(({ cmimiBlerjes: _cost, ...rest }) => rest)
       )
     }
 
-    return NextResponse.json(filtered)
+    return NextResponse.json(products)
   } catch (error) {
     return handleApiError(error, 'Products GET')
   }

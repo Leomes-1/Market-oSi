@@ -50,7 +50,9 @@ export async function GET(req: NextRequest) {
       where: {
         createdAt: dateTo ? { gte: dateFrom, lt: dateTo } : { gte: dateFrom },
       },
-      include: { items: { include: { product: true } } },
+      // Historiku reads only these product fields (unit, and stock for the
+      // edit limit); the full row is not sent.
+      include: { items: { include: { product: { select: { id: true, sasia: true, njesia: true } } } } },
       orderBy: { createdAt: 'desc' },
     })
 

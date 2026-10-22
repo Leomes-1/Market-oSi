@@ -13,16 +13,36 @@ const SUPPLY_INCLUDE = {
   },
 } as const
 
-export async function GET() {
+/** Supplies per page of GET /api/supplies. */
+const PAGE_SIZE = 100
+
+/**
+ * Newest first, one page at a time: `{ supplies, nextCursor }`, where
+ * nextCursor is the `?cursor=` for the following page, or null at the end.
+ *
+ * The list screen doesn't use the products behind each line, so they are not
+ * joined in here (the POST response still carries them).
+ */
+export async function GET(req: NextRequest) {
   const { error } = await requireRole(['admin', 'staff'])
   if (error) return error
 
   try {
-    const supplies = await prisma.supply.findMany({
-      include: SUPPLY_INCLUDE,
-      orderBy: { createdAt: 'desc' },
+    const cursor = Number(new URL(req.url).searchParams.get('cursor'))
+    const page = await prisma.supply.findMany({
+      include: { furnitor: SUPPLY_INCLUDE.furnitor, items: true },
+      // id breaks ties between supplies created in the same millisecond, so
+      // the cursor never skips or repeats one.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: PAGE_SIZE + 1,
+      ...(Number.isInteger(cursor) && cursor > 0 ? { cursor: { id: cursor }, skip: 1 } : {}),
     })
-    return NextResponse.json(supplies)
+    const hasMore = page.length > PAGE_SIZE
+    const supplies = hasMore ? page.slice(0, PAGE_SIZE) : page
+    return NextResponse.json({
+      supplies,
+      nextCursor: hasMore ? supplies[supplies.length - 1].id : null,
+    })
   } catch (error) {
     return handleApiError(error, 'Supplies GET')
   }

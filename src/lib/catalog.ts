@@ -101,6 +101,15 @@ async function load(force: boolean): Promise<CatalogProduct[]> {
   return inflight
 }
 
+/**
+ * The catalogue for code outside React (or a screen that only needs it on
+ * demand): the cached copy if there is one, otherwise a single load shared
+ * with anything else asking at the same time.
+ */
+export function getCatalog(): Promise<CatalogProduct[]> {
+  return load(false)
+}
+
 /** Refetches in the background; the current copy stays in use meanwhile. */
 export async function refreshCatalog(): Promise<CatalogProduct[]> {
   return load(true)

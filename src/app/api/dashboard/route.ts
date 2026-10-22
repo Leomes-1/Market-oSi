@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
-import { isLowStock } from '@/lib/utils'
+import { lowStockWhere } from '@/lib/low-stock'
 
 export const dynamic = 'force-dynamic'
 
@@ -93,7 +93,8 @@ export async function GET(request: NextRequest) {
 
     const [
       saleSummary,
-      allProducts,
+      productCount,
+      lowStockAll,
       suppliersCount,
       topPeriodProducts,
       recentSales,
@@ -128,7 +129,11 @@ export async function GET(request: NextRequest) {
                     GROUP BY 1) m)                                                           AS mujor
         FROM s
       `,
+      prisma.product.count(),
+      // Only the low-stock rows, filtered in SQL, in the order the JS sort
+      // below has always started from.
       prisma.product.findMany({
+        where: lowStockWhere(),
         select: { id: true, emri: true, sasia: true, stokuMinimal: true, kategoria: true, njesia: true },
         orderBy: { emri: 'asc' },
       }),
@@ -174,8 +179,7 @@ export async function GET(request: NextRequest) {
     const shitjetMuajitFitimi = sum.muaji_fitimi ?? 0
 
     // Low stock
-    const lowStockProducts = allProducts
-      .filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
+    const lowStockProducts = lowStockAll
       .sort((a, b) => a.sasia / a.stokuMinimal - b.sasia / b.stokuMinimal)
       .slice(0, 8)
 
@@ -254,7 +258,7 @@ export async function GET(request: NextRequest) {
       shitjetSotTotali,
       shitjetMuajitTotali,
       shitjetMuajitFitimi,
-      produktetTotal: allProducts.length,
+      produktetTotal: productCount,
       lowStockCount: lowStockProducts.length,
       lowStockProducts,
       furnitoretTotal: suppliersCount,

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { handleApiError } from '@/lib/api'
-import { isLowStock } from '@/lib/utils'
+import { lowStockWhere } from '@/lib/low-stock'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,13 +11,24 @@ export async function GET() {
   if (error) return error
 
   try {
-    const products = await prisma.product.findMany({
-      include: { furnitor: true },
+    // Filtered in SQL. Untracked (kg) products have no meaningful count to
+    // reorder from, so the filter leaves them out.
+    const lowStock = await prisma.product.findMany({
+      where: lowStockWhere(),
+      select: {
+        id: true,
+        emri: true,
+        kategoria: true,
+        sasia: true,
+        stokuMinimal: true,
+        njesia: true,
+        cmimiBlerjes: true,
+        cmimiShitjes: true,
+        furnitorId: true,
+        furnitor: { select: { emri: true } },
+      },
       orderBy: { emri: 'asc' },
     })
-
-    // Untracked (kg) products have no meaningful count to reorder from.
-    const lowStock = products.filter((p) => isLowStock(p.sasia, p.stokuMinimal, p.njesia))
 
     type GroupedItem = {
       id: number

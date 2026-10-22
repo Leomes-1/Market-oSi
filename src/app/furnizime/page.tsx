@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import toast from 'react-hot-toast'
@@ -27,7 +27,6 @@ interface SupplyItemData {
   njesia: string
   cmimiBlerjes: number
   totali: number
-  product: { id: number; emri: string; njesia: string } | null
 }
 
 interface Supply {
@@ -66,20 +65,38 @@ export default function FurnizimePage() {
   const [supplyToDelete, setSupplyToDelete] = useState<Supply | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Bumped on every reload, so a slower earlier load can't append its pages
+  // to a newer list.
+  const loadGeneration = useRef(0)
+
+  // The API pages the list. The first page shows as soon as it arrives; the
+  // rest are appended in the background, so the period filter and the totals
+  // above it still cover every supply, exactly as with one big response.
   const fetchSupplies = useCallback(async () => {
+    const generation = ++loadGeneration.current
     setLoading(true)
     setError(false)
     try {
-      const res = await fetch('/api/supplies')
-      if (res.status === 401) { window.location.href = '/login'; return }
-      if (!res.ok) throw new Error()
-      const data = await res.json()
-      setSupplies(toArray<Supply>(data, 'supplies'))
+      let cursor: number | null = null
+      let first = true
+      do {
+        const res: Response = await fetch(`/api/supplies${cursor ? `?cursor=${cursor}` : ''}`)
+        if (res.status === 401) { window.location.href = '/login'; return }
+        if (!res.ok) throw new Error()
+        const data = await res.json()
+        if (generation !== loadGeneration.current) return
+        const page = toArray<Supply>(data, 'supplies')
+        setSupplies((prev) => (first ? page : [...prev, ...page]))
+        if (first) setLoading(false)
+        first = false
+        cursor = typeof data?.nextCursor === 'number' ? data.nextCursor : null
+      } while (cursor)
     } catch {
+      if (generation !== loadGeneration.current) return
       setError(true)
       toast.error('Gabim gjatë ngarkimit')
     } finally {
-      setLoading(false)
+      if (generation === loadGeneration.current) setLoading(false)
     }
   }, [])
 
