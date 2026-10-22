@@ -1,4 +1,5 @@
-import { createClient } from './supabase/server'
+import { headers } from 'next/headers'
+import { USER_ID_HEADER } from './auth-header'
 import { prisma } from './prisma'
 import { NextResponse } from 'next/server'
 import { Role } from './roles'
@@ -11,7 +12,13 @@ export interface AuthResult {
 }
 
 /**
- * Resolves the caller from the Supabase session cookie and looks up their role.
+ * Resolves the caller and looks up their role.
+ *
+ * The session itself was verified once, by `supabase.auth.getUser()` in
+ * middleware, which forwards the user id in a header it alone sets (any copy
+ * from the browser is deleted first — see lib/auth-header). No header means
+ * the middleware found no session: 401, exactly as a failed getUser() here
+ * used to give.
  *
  * Unlike the root layout, this never creates a UserRole row — an API call is
  * not the place to provision an account. A signed-in user with no row is
@@ -19,12 +26,9 @@ export interface AuthResult {
  */
 export async function getAuthUserAndRole(): Promise<AuthResult> {
   try {
-    const supabase = createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const userId = headers().get(USER_ID_HEADER)
 
-    if (!user) {
+    if (!userId) {
       return {
         userId: null,
         role: null,
@@ -32,10 +36,10 @@ export async function getAuthUserAndRole(): Promise<AuthResult> {
       }
     }
 
-    const userRole = await prisma.userRole.findUnique({ where: { userId: user.id } })
+    const userRole = await prisma.userRole.findUnique({ where: { userId } })
     const role = (userRole?.roli as Role) || 'staff'
 
-    return { userId: user.id, role, error: null }
+    return { userId, role, error: null }
   } catch (error) {
     if (
       typeof error === 'object' &&
