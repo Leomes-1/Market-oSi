@@ -1,16 +1,16 @@
 'use client'
 
-import { memo, useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { memo, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
-import { usePresence } from '@/lib/animation'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
 import { lookupBarcode, patchCatalog, useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
 import { tracksStock, weightForAmount } from '@/lib/validation'
-import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
+import SearchInput from '@/components/ui/SearchInput'
+import BarcodeField, { type BarcodeFieldHandle } from '@/components/pos/BarcodeField'
 import {
   RiAddLine,
   RiSubtractLine,
@@ -18,10 +18,11 @@ import {
   RiShoppingCartLine,
   RiPrinterLine,
   RiCheckLine,
-  RiBarcodeLine,
   RiMenuLine,
 } from 'react-icons/ri'
 import { useDesktopSidebar } from '@/components/layout/ClientLayout'
+import PosDebugOverlay from '@/components/ui/PosDebugOverlay'
+import { countRender, markCartCommitted, markEnter } from '@/lib/pos-debug'
 
 type Product = CatalogProduct
 
@@ -116,6 +117,68 @@ function pendingFor(p: CatalogProduct) {
   )
 }
 
+interface ProductTileProps {
+  product: Product
+  /** This product's cart line, if it is in the cart. */
+  line: CartItem | undefined
+  onAdd: (product: Product) => void
+}
+
+/**
+ * One product tile. Memoised: a cart change re-renders only the tile whose
+ * line changed (unchanged lines keep their object identity), not all ~600.
+ */
+const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd }: ProductTileProps) {
+  countRender('ProductTile')
+  const tracked = tracksStock(product.njesia)
+  const outOfStock = tracked && product.sasia <= 0
+  const pending = pendingFor(product)
+  return (
+    <button
+      onClick={() => !outOfStock && onAdd(product)}
+      disabled={outOfStock}
+      className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
+        outOfStock
+          ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
+          : inCart
+          ? 'border-blue-400 bg-blue-50 hover:scale-[1.01] active:scale-[0.98]'
+          : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]'
+      }`}
+    >
+      <div className="flex items-start justify-between mb-1.5 sm:mb-2">
+        <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
+        {inCart && (
+          <span className="badge-blue ml-1 flex-shrink-0 text-xs">
+            {!tracked
+              ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
+              : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
+      {pending && (
+        <p className="text-xs text-amber-600 mb-1.5 leading-tight">
+          ⏳ {pending}
+        </p>
+      )}
+      <div className="flex items-center justify-between">
+        <span className="text-sm sm:text-base font-bold text-slate-900">
+          {formatCurrency(product.cmimiShitjes)}
+        </span>
+        {tracked ? (
+          <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
+            {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
+          </span>
+        ) : (
+          <span className="text-xs font-medium hidden sm:block text-slate-400">
+            / {product.njesia}
+          </span>
+        )}
+      </div>
+    </button>
+  )
+})
+
 interface ProductGridProps {
   products: Product[]
   cart: CartItem[]
@@ -125,64 +188,18 @@ interface ProductGridProps {
 }
 
 /**
- * The product tiles. Memoised on its props, so typing a barcode — one state
- * update per character from a scanner — no longer re-renders ~600 tiles per
- * keystroke; only the cart or the search result changing does.
+ * The product tiles. Memoised on its props, so nothing typed in the barcode
+ * field reaches it; a cart change re-renders the grid but only the changed
+ * tile (see ProductTile).
  */
 const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty }: ProductGridProps) {
+  countRender('ProductGrid')
+  const lines = useMemo(() => new Map(cart.map((line) => [line.product.id, line])), [cart])
   return (
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
-      {products.map((product) => {
-        const inCart = cart.find((i) => i.product.id === product.id)
-        const tracked = tracksStock(product.njesia)
-        const outOfStock = tracked && product.sasia <= 0
-        const pending = pendingFor(product)
-        return (
-          <button
-            key={product.id}
-            onClick={() => !outOfStock && onAdd(product)}
-            disabled={outOfStock}
-            className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
-              outOfStock
-                ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
-                : inCart
-                ? 'border-blue-400 bg-blue-50 hover:scale-[1.01] active:scale-[0.98]'
-                : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]'
-            }`}
-          >
-            <div className="flex items-start justify-between mb-1.5 sm:mb-2">
-              <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
-              {inCart && (
-                <span className="badge-blue ml-1 flex-shrink-0 text-xs">
-                  {!tracked
-                    ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
-                    : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
-            {pending && (
-              <p className="text-xs text-amber-600 mb-1.5 leading-tight">
-                ⏳ {pending}
-              </p>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-sm sm:text-base font-bold text-slate-900">
-                {formatCurrency(product.cmimiShitjes)}
-              </span>
-              {tracked ? (
-                <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
-                  {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
-                </span>
-              ) : (
-                <span className="text-xs font-medium hidden sm:block text-slate-400">
-                  / {product.njesia}
-                </span>
-              )}
-            </div>
-          </button>
-        )
-      })}
+      {products.map((product) => (
+        <ProductTile key={product.id} product={product} line={lines.get(product.id)} onAdd={onAdd} />
+      ))}
       {products.length === 0 && showEmpty && (
         <div className="col-span-full text-center py-12 text-slate-400">
           Nuk u gjet asnjë produkt
@@ -193,6 +210,7 @@ const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty
 })
 
 export default function ShitjetPage() {
+  countRender('ShitjetPage')
   const { role } = useRole()
   const desktopSidebar = useDesktopSidebar()
   const {
@@ -207,16 +225,9 @@ export default function ShitjetPage() {
   const [loading, setLoading] = useState(false)
   const [receiptModal, setReceiptModal] = useState<CompletedSale | null>(null)
   const [rawValues, setRawValues] = useState<Record<number, string>>({})
-  const [barkodi, setBarkodi] = useState('')
-  const [scanFlash, setScanFlash] = useState<'success' | 'error' | null>(null)
-  const [scanMessage, setScanMessage] = useState('')
-  // The message keeps its text and colour while it fades out.
-  const scanMessagePresence = usePresence(!!scanMessage, 300)
-  const shownScanMessageRef = useRef<{ text: string; tone: typeof scanFlash }>({ text: '', tone: null })
-  if (scanMessage) shownScanMessageRef.current = { text: scanMessage, tone: scanFlash }
-  const shownScanMessage = shownScanMessageRef.current
   const [mobileTab, setMobileTab] = useState<'products' | 'cart'>('products')
-  const barcodeRef = useRef<SearchInputHandle>(null)
+  // The barcode field owns its value, colour and message (BarcodeField).
+  const barcodeRef = useRef<BarcodeFieldHandle>(null)
   const amountRefs = useRef<Map<number, HTMLInputElement>>(new Map())
   const contentRef = useRef<HTMLDivElement>(null)
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map())
@@ -347,20 +358,10 @@ export default function ShitjetPage() {
     }
   }
 
-  // One timer for the scan feedback, so an earlier scan's timeout can't wipe
-  // the message of the scan after it.
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   function triggerFlash(type: 'success' | 'error', message: string, duration = 1000) {
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
-    setScanFlash(type)
-    setScanMessage(message)
+    barcodeRef.current?.flash(type, message, duration)
     playBeep(type)
     vibrateDevice(type === 'success' ? 50 : [80, 50, 80])
-    flashTimerRef.current = setTimeout(() => {
-      setScanFlash(null)
-      setScanMessage('')
-    }, duration)
   }
 
   // The cart as last rendered, for a scan that resolves after a server lookup:
@@ -368,10 +369,12 @@ export default function ShitjetPage() {
   const cartRef = useRef(cart)
   cartRef.current = cart
 
+  // ?debug=1: time from Enter until the cart is in the DOM.
+  useLayoutEffect(() => markCartCommitted(), [cart])
+
   function handleBarcodeSubmit(code: string) {
-    // Clear immediately so the next scan can start even while this one is
-    // still being processed.
-    setBarkodi('')
+    markEnter(code)
+    // BarcodeField has already cleared itself for the next scan.
 
     // Normal path: the cached catalogue, in memory — no request.
     const product = findByBarcode(code)
@@ -382,9 +385,7 @@ export default function ShitjetPage() {
 
     // Not in the cache: possibly a product added on another device since this
     // page loaded. One lookup on the server before calling it unknown.
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
-    setScanFlash(null)
-    setScanMessage('Duke kërkuar...')
+    barcodeRef.current?.notice('Duke kërkuar...')
     lookupBarcode(code).then(
       (found) => {
         if (found) {
@@ -510,6 +511,11 @@ export default function ShitjetPage() {
     setKerkimi('')
     barcodeRef.current?.focus()
   }
+
+  // Stable identity for the memoised barcode field; always the current handler.
+  const handleBarcodeSubmitRef = useRef(handleBarcodeSubmit)
+  handleBarcodeSubmitRef.current = handleBarcodeSubmit
+  const onBarcodeScan = useCallback((code: string) => handleBarcodeSubmitRef.current(code), [])
 
   // Stable identity for the memoised grid; always calls the current addToCart.
   const addToCartRef = useRef(addToCart)
@@ -767,48 +773,8 @@ export default function ShitjetPage() {
               <h1 className="text-lg sm:text-xl font-bold text-slate-900">Shitjet — POS</h1>
             </div>
 
-            {/* Barcode Scanner Input */}
-            <div>
-              <SearchInput
-                ref={barcodeRef}
-                variant="barcode"
-                value={barkodi}
-                onChange={setBarkodi}
-                onSubmit={handleBarcodeSubmit}
-                tone={scanFlash ?? 'neutral'}
-                autoFocus="always"
-                placeholder="Skano ose shkruaj barkodin..."
-                inputClassName="py-2.5 text-sm font-medium rounded-xl border-2"
-                icon={
-                  scanFlash === 'success' ? (
-                    <RiCheckLine className="text-xl" />
-                  ) : scanFlash === 'error' ? (
-                    <span className="text-lg font-bold leading-none">✗</span>
-                  ) : (
-                    <RiBarcodeLine className="text-xl" />
-                  )
-                }
-              />
-              {scanMessagePresence.mounted && (
-                <p
-                  className={`text-xs mt-1.5 font-medium pl-1 transition-[opacity,transform] duration-300 ease-out ${
-                    scanMessagePresence.phase === 'entering'
-                      ? 'opacity-0 -translate-y-1'
-                      : scanMessagePresence.phase === 'leaving'
-                      ? 'opacity-0'
-                      : 'opacity-100'
-                  } ${
-                    shownScanMessage.tone === 'success'
-                      ? 'text-green-600'
-                      : shownScanMessage.tone === 'error'
-                      ? 'text-red-500'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  {shownScanMessage.text}
-                </p>
-              )}
-            </div>
+            {/* Barcode Scanner Input — its own component, so typing re-renders only it */}
+            <BarcodeField ref={barcodeRef} onScan={onBarcodeScan} />
 
             {/* Product Name / Category Search */}
             <SearchInput
@@ -819,7 +785,14 @@ export default function ShitjetPage() {
             />
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4">
+          {/*
+            contain: strict makes this scroller a layout boundary. Without it,
+            every character typed in the barcode field above made the browser
+            lay out all ~600 tiles again (15-50 ms per keystroke). Its size
+            comes from the flex column, never from its content, so size
+            containment changes nothing on screen.
+          */}
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 [contain:strict]">
             {productsLoading ? (
               <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3 animate-pulse">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -873,7 +846,8 @@ export default function ShitjetPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto min-h-0">
+          {/* Layout boundary for the cart lines, as for the product grid. */}
+          <div className="flex-1 overflow-y-auto min-h-0 [contain:strict]">
             {cart.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-slate-400 py-16">
                   <RiShoppingCartLine className="text-5xl mb-3 text-slate-200" />
@@ -883,6 +857,7 @@ export default function ShitjetPage() {
               ) : (
                 <div className="divide-y divide-slate-100">
                   {cart.map((item) => (
+                    countRender('CartLine'),
                     <div
                       key={item.product.id}
                       ref={(el: HTMLDivElement | null) => {
@@ -1027,6 +1002,8 @@ export default function ShitjetPage() {
         </div>
 
       </div>{/* ── end content area ── */}
+
+      <PosDebugOverlay />
 
       {/* Receipt Modal */}
       <Modal
