@@ -4,7 +4,6 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } fr
 import { RiBarcodeLine, RiCheckLine } from 'react-icons/ri'
 import SearchInput, { type SearchInputHandle } from '@/components/ui/SearchInput'
 import { usePresence } from '@/lib/animation'
-import { countRender, markKey } from '@/lib/pos-debug'
 
 export type ScanTone = 'success' | 'error'
 
@@ -30,7 +29,6 @@ export interface BarcodeFieldHandle {
  */
 const BarcodeField = memo(
   forwardRef<BarcodeFieldHandle, { onScan: (code: string) => void }>(function BarcodeField({ onScan }, ref) {
-    countRender('BarcodeField')
     const [value, setValue] = useState('')
     const [tone, setTone] = useState<ScanTone | null>(null)
     const [message, setMessage] = useState('')
@@ -75,10 +73,7 @@ const BarcodeField = memo(
           ref={inputRef}
           variant="barcode"
           value={value}
-          onChange={(v) => {
-            markKey()
-            setValue(v)
-          }}
+          onChange={setValue}
           onSubmit={(code) => {
             // Clear at once so the next scan can start straight away.
             setValue('')

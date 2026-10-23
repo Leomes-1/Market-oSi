@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { memo, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import toast from 'react-hot-toast'
@@ -21,8 +21,6 @@ import {
   RiMenuLine,
 } from 'react-icons/ri'
 import { useDesktopSidebar } from '@/components/layout/ClientLayout'
-import PosDebugOverlay from '@/components/ui/PosDebugOverlay'
-import { countRender, markCartCommitted, markEnter } from '@/lib/pos-debug'
 
 type Product = CatalogProduct
 
@@ -129,7 +127,6 @@ interface ProductTileProps {
  * line changed (unchanged lines keep their object identity), not all ~600.
  */
 const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd }: ProductTileProps) {
-  countRender('ProductTile')
   const tracked = tracksStock(product.njesia)
   const outOfStock = tracked && product.sasia <= 0
   const pending = pendingFor(product)
@@ -193,7 +190,6 @@ interface ProductGridProps {
  * tile (see ProductTile).
  */
 const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty }: ProductGridProps) {
-  countRender('ProductGrid')
   const lines = useMemo(() => new Map(cart.map((line) => [line.product.id, line])), [cart])
   return (
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
@@ -210,7 +206,6 @@ const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty
 })
 
 export default function ShitjetPage() {
-  countRender('ShitjetPage')
   const { role } = useRole()
   const desktopSidebar = useDesktopSidebar()
   const {
@@ -369,11 +364,7 @@ export default function ShitjetPage() {
   const cartRef = useRef(cart)
   cartRef.current = cart
 
-  // ?debug=1: time from Enter until the cart is in the DOM.
-  useLayoutEffect(() => markCartCommitted(), [cart])
-
   function handleBarcodeSubmit(code: string) {
-    markEnter(code)
     // BarcodeField has already cleared itself for the next scan.
 
     // Normal path: the cached catalogue, in memory — no request.
@@ -857,7 +848,6 @@ export default function ShitjetPage() {
               ) : (
                 <div className="divide-y divide-slate-100">
                   {cart.map((item) => (
-                    countRender('CartLine'),
                     <div
                       key={item.product.id}
                       ref={(el: HTMLDivElement | null) => {
@@ -1002,8 +992,6 @@ export default function ShitjetPage() {
         </div>
 
       </div>{/* ── end content area ── */}
-
-      <PosDebugOverlay />
 
       {/* Receipt Modal */}
       <Modal
