@@ -6,11 +6,12 @@ import AccessDenied from '@/components/AccessDenied'
 import toast from 'react-hot-toast'
 import Modal from '@/components/ui/Modal'
 import { formatCurrency, formatDateTime } from '@/lib/utils'
-import { lookupBarcode, patchCatalog, useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { lookupBarcode, patchCatalog, upsertCatalog, useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { pendingLabel } from '@/lib/pricing'
 import { tracksStock, weightForAmount } from '@/lib/validation'
-import SearchInput from '@/components/ui/SearchInput'
 import BarcodeField, { type BarcodeFieldHandle } from '@/components/pos/BarcodeField'
+import AddTilePicker from '@/components/pos/AddTilePicker'
+import { tileEmoji, tileTone } from '@/components/pos/tile-look'
 import {
   RiAddLine,
   RiSubtractLine,
@@ -19,6 +20,7 @@ import {
   RiPrinterLine,
   RiCheckLine,
   RiMenuLine,
+  RiCloseLine,
 } from 'react-icons/ri'
 import { useDesktopSidebar } from '@/components/layout/ClientLayout'
 
@@ -115,64 +117,90 @@ function pendingFor(p: CatalogProduct) {
   )
 }
 
+/** Tiles show kg products automatically, plus whatever an admin added. */
+function isTile(p: Product) {
+  return p.njesia === 'kg' || p.neArke
+}
+
+const TILE_GRID = 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2 sm:gap-3'
+
 interface ProductTileProps {
   product: Product
   /** This product's cart line, if it is in the cart. */
   line: CartItem | undefined
   onAdd: (product: Product) => void
+  /** Set for tiles an admin added by hand: shows × to take it off the tiles. */
+  onRemove?: (product: Product) => void
 }
 
 /**
  * One product tile. Memoised: a cart change re-renders only the tile whose
- * line changed (unchanged lines keep their object identity), not all ~600.
+ * line changed (unchanged lines keep their object identity), not all of them.
  */
-const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd }: ProductTileProps) {
+const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd, onRemove }: ProductTileProps) {
   const tracked = tracksStock(product.njesia)
   const outOfStock = tracked && product.sasia <= 0
   const pending = pendingFor(product)
   return (
-    <button
-      onClick={() => !outOfStock && onAdd(product)}
-      disabled={outOfStock}
-      className={`text-left p-3 sm:p-4 rounded-xl border-2 transition-all min-h-[5rem] ${
-        outOfStock
-          ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
-          : inCart
-          ? 'border-blue-400 bg-blue-50 hover:scale-[1.01] active:scale-[0.98]'
-          : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]'
-      }`}
-    >
-      <div className="flex items-start justify-between mb-1.5 sm:mb-2">
-        <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">{product.emri}</p>
-        {inCart && (
-          <span className="badge-blue ml-1 flex-shrink-0 text-xs">
-            {!tracked
-              ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
-              : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
+    <div className="relative">
+      <button
+        onClick={() => !outOfStock && onAdd(product)}
+        disabled={outOfStock}
+        className={`w-full h-full text-left p-3 sm:p-4 rounded-2xl border-2 transition-all min-h-[9rem] flex flex-col ${
+          outOfStock
+            ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
+            : inCart
+            ? 'border-blue-400 bg-blue-50 hover:scale-[1.01] active:scale-[0.98]'
+            : `${tileTone(product.kategoria)} hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]`
+        }`}
+      >
+        <div className="flex items-start justify-between">
+          <span className="text-4xl sm:text-5xl leading-none" aria-hidden>
+            {tileEmoji(product.emri, product.kategoria)}
           </span>
-        )}
-      </div>
-      <p className="text-xs text-slate-400 mb-1.5 sm:mb-2 truncate">{product.kategoria}</p>
-      {pending && (
-        <p className="text-xs text-amber-600 mb-1.5 leading-tight">
-          ⏳ {pending}
+          {inCart && (
+            <span className={`badge-blue flex-shrink-0 text-xs ${onRemove ? 'mr-6' : ''}`}>
+              {!tracked
+                ? inCart.shuma != null ? formatCurrency(inCart.shuma) : '•'
+                : isWeighted(product.njesia) ? inCart.sasia.toFixed(3) : inCart.sasia}
+            </span>
+          )}
+        </div>
+        <p className="mt-2 font-semibold text-slate-900 text-sm sm:text-base leading-tight line-clamp-2">
+          {product.emri}
         </p>
-      )}
-      <div className="flex items-center justify-between">
-        <span className="text-sm sm:text-base font-bold text-slate-900">
-          {formatCurrency(product.cmimiShitjes)}
-        </span>
-        {tracked ? (
-          <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
-            {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia} {product.njesia}
-          </span>
-        ) : (
-          <span className="text-xs font-medium hidden sm:block text-slate-400">
-            / {product.njesia}
-          </span>
+        {pending && (
+          <p className="text-xs text-amber-600 mt-1 leading-tight">
+            ⏳ {pending}
+          </p>
         )}
-      </div>
-    </button>
+        <div className="mt-auto pt-2 flex items-end justify-between gap-1">
+          <span className="text-base sm:text-lg font-bold text-slate-900">
+            {formatCurrency(product.cmimiShitjes)}
+            <span className="text-xs font-medium text-slate-500"> / {product.njesia}</span>
+          </span>
+          {/* No stock count on kg products: the shop doesn't track it. */}
+          {tracked && (
+            <span className={`text-xs font-medium hidden sm:block ${product.sasia <= product.stokuMinimal ? 'text-red-500' : 'text-slate-400'}`}>
+              {isWeighted(product.njesia) ? product.sasia.toFixed(3) : product.sasia}
+            </span>
+          )}
+        </div>
+      </button>
+      {onRemove && (
+        // A sibling of the tile, not inside it: a button can't hold a button,
+        // and a click here must not add the product to the cart.
+        <button
+          type="button"
+          onClick={() => onRemove(product)}
+          aria-label={`Hiq ${product.emri} nga pllakat`}
+          title="Hiq nga pllakat (produkti mbetet në bazë)"
+          className="absolute top-1.5 right-1.5 w-6 h-6 inline-flex items-center justify-center rounded-full bg-white/90 border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-300 transition-colors"
+        >
+          <RiCloseLine className="text-sm" />
+        </button>
+      )}
+    </div>
   )
 })
 
@@ -180,25 +208,43 @@ interface ProductGridProps {
   products: Product[]
   cart: CartItem[]
   onAdd: (product: Product) => void
-  /** Show "nothing found" when the list is empty because of a search. */
-  showEmpty: boolean
+  /** Admin only: × on hand-added tiles and the "+ Shto produkt" tile. */
+  onRemove?: (product: Product) => void
+  onOpenPicker?: () => void
 }
 
 /**
- * The product tiles. Memoised on its props, so nothing typed in the barcode
- * field reaches it; a cart change re-renders the grid but only the changed
- * tile (see ProductTile).
+ * The POS tiles: every kg product plus the ones an admin added. Memoised on
+ * its props, so nothing typed in the barcode field reaches it; a cart change
+ * re-renders the grid but only the changed tile (see ProductTile).
  */
-const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, showEmpty }: ProductGridProps) {
+const ProductGrid = memo(function ProductGrid({ products, cart, onAdd, onRemove, onOpenPicker }: ProductGridProps) {
   const lines = useMemo(() => new Map(cart.map((line) => [line.product.id, line])), [cart])
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3">
+    <div className={TILE_GRID}>
       {products.map((product) => (
-        <ProductTile key={product.id} product={product} line={lines.get(product.id)} onAdd={onAdd} />
+        <ProductTile
+          key={product.id}
+          product={product}
+          line={lines.get(product.id)}
+          onAdd={onAdd}
+          // kg tiles are automatic, so only hand-added ones get the ×.
+          onRemove={onRemove && product.neArke && product.njesia !== 'kg' ? onRemove : undefined}
+        />
       ))}
-      {products.length === 0 && showEmpty && (
+      {onOpenPicker && (
+        <button
+          type="button"
+          onClick={onOpenPicker}
+          className="min-h-[9rem] rounded-2xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 transition-colors flex flex-col items-center justify-center gap-1"
+        >
+          <RiAddLine className="text-3xl" />
+          <span className="text-sm font-semibold">Shto produkt</span>
+        </button>
+      )}
+      {products.length === 0 && !onOpenPicker && (
         <div className="col-span-full text-center py-12 text-slate-400">
-          Nuk u gjet asnjë produkt
+          Nuk ka pllaka. Skano barkodin ose kërko produktin lart.
         </div>
       )}
     </div>
@@ -213,9 +259,8 @@ export default function ShitjetPage() {
     loading: productsLoading,
     error: productsError,
     findByBarcode,
-    search,
   } = useCatalog()
-  const [kerkimi, setKerkimi] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [cart, setCart] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
   const [receiptModal, setReceiptModal] = useState<CompletedSale | null>(null)
@@ -286,6 +331,10 @@ export default function ShitjetPage() {
 
   // Keep receiptModalRef in sync for the document click handler (avoids stale closure)
   useEffect(() => { receiptModalRef.current = receiptModal }, [receiptModal])
+  // Same for the "+ Shto produkt" picker: clicks inside it must not pull
+  // focus back to the field behind it.
+  const pickerOpenRef = useRef(false)
+  useEffect(() => { pickerOpenRef.current = pickerOpen }, [pickerOpen])
 
   // Refocus barcode when receipt modal is dismissed
   useEffect(() => {
@@ -297,7 +346,7 @@ export default function ShitjetPage() {
   // Return focus to barcode after any click that doesn't land on a real input
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (receiptModalRef.current) return
+      if (receiptModalRef.current || pickerOpenRef.current) return
       const t = e.target as HTMLElement
       if (t.closest('input, textarea, select')) return
       setTimeout(() => {
@@ -311,9 +360,9 @@ export default function ShitjetPage() {
     return () => document.removeEventListener('click', onDocClick)
   }, [])
 
-  // Name/category search runs against the cached catalogue — no request, so
-  // nothing can arrive out of order and flicker.
-  const filteredProducts = useMemo(() => search(kerkimi), [search, kerkimi])
+  // Only kg products and hand-added ones are tiles; scanning and the search
+  // dropdown still reach every product.
+  const tiles = useMemo(() => products.filter(isTile), [products])
 
   function playBeep(type: 'success' | 'error') {
     try {
@@ -453,7 +502,6 @@ export default function ShitjetPage() {
         : [...prev, { product, sasia: 0, shuma: null }]
     )
     markAdded(product.id)
-    setKerkimi('')
     // After the line has rendered, so its input exists.
     setTimeout(() => {
       const el = amountRefs.current.get(product.id)
@@ -499,7 +547,6 @@ export default function ShitjetPage() {
       return next
     })
     markAdded(product.id)
-    setKerkimi('')
     barcodeRef.current?.focus()
   }
 
@@ -507,6 +554,41 @@ export default function ShitjetPage() {
   const handleBarcodeSubmitRef = useRef(handleBarcodeSubmit)
   handleBarcodeSubmitRef.current = handleBarcodeSubmit
   const onBarcodeScan = useCallback((code: string) => handleBarcodeSubmitRef.current(code), [])
+
+  // A product picked from the field's dropdown counts as a scan of it.
+  const addScannedRef = useRef(addScanned)
+  addScannedRef.current = addScanned
+  const onPickProduct = useCallback((product: Product) => addScannedRef.current(product), [])
+
+  /** Puts a product on the tiles or takes it off. Admin only (server-checked). */
+  async function setTile(product: Product, neArke: boolean) {
+    try {
+      const res = await fetch(`/api/products/${product.id}/tile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ neArke }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        toast.error(err?.error || 'Pllaka nuk u ruajt')
+        return
+      }
+      upsertCatalog([(await res.json()) as Product])
+      toast.success(neArke ? `${product.emri} u shtua te pllakat` : `${product.emri} u hoq nga pllakat`)
+    } catch {
+      toast.error('Pllaka nuk u ruajt — kontrollo lidhjen')
+    }
+  }
+
+  const setTileRef = useRef(setTile)
+  setTileRef.current = setTile
+  const onRemoveTile = useCallback((product: Product) => { void setTileRef.current(product, false) }, [])
+  const onAddTile = useCallback((product: Product) => setTileRef.current(product, true), [])
+  const onOpenPicker = useCallback(() => setPickerOpen(true), [])
+  const onClosePicker = useCallback(() => {
+    setPickerOpen(false)
+    setTimeout(() => barcodeRef.current?.focus(), 100)
+  }, [])
 
   // Stable identity for the memoised grid; always calls the current addToCart.
   const addToCartRef = useRef(addToCart)
@@ -764,15 +846,13 @@ export default function ShitjetPage() {
               <h1 className="text-lg sm:text-xl font-bold text-slate-900">Shitjet — POS</h1>
             </div>
 
-            {/* Barcode Scanner Input — its own component, so typing re-renders only it */}
-            <BarcodeField ref={barcodeRef} onScan={onBarcodeScan} />
-
-            {/* Product Name / Category Search */}
-            <SearchInput
-              value={kerkimi}
-              onChange={setKerkimi}
-              placeholder="Kërko produkt sipas emrit ose kategorisë..."
-              inputClassName="text-sm"
+            {/* Scan or search in one field — its own component, so typing re-renders only it */}
+            <BarcodeField
+              ref={barcodeRef}
+              onScan={onBarcodeScan}
+              onPick={onPickProduct}
+              products={products}
+              findByBarcode={findByBarcode}
             />
           </div>
 
@@ -785,9 +865,9 @@ export default function ShitjetPage() {
           */}
           <div className="flex-1 overflow-y-auto p-3 sm:p-4 [contain:strict]">
             {productsLoading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2 sm:gap-3 animate-pulse">
+              <div className={`${TILE_GRID} animate-pulse`}>
                 {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="h-28 bg-slate-100 rounded-xl" />
+                  <div key={i} className="h-36 bg-slate-100 rounded-2xl" />
                 ))}
               </div>
             ) : productsError ? (
@@ -802,10 +882,11 @@ export default function ShitjetPage() {
               </div>
             ) : (
               <ProductGrid
-                products={filteredProducts}
+                products={tiles}
                 cart={cart}
                 onAdd={onAddProduct}
-                showEmpty={!!kerkimi}
+                onRemove={isAdmin ? onRemoveTile : undefined}
+                onOpenPicker={isAdmin ? onOpenPicker : undefined}
               />
             )}
           </div>
@@ -992,6 +1073,15 @@ export default function ShitjetPage() {
         </div>
 
       </div>{/* ── end content area ── */}
+
+      {isAdmin && (
+        <AddTilePicker
+          isOpen={pickerOpen}
+          onClose={onClosePicker}
+          products={products}
+          onAdd={onAddTile}
+        />
+      )}
 
       {/* Receipt Modal */}
       <Modal

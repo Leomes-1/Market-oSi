@@ -24,6 +24,8 @@ export interface CatalogProduct {
   cmimiShitjesRi: number | null
   cmimiBlerjesRi?: number | null
   sasiaVjeter: number | null
+  /** Admin put this product on the POS tiles (kg products are tiles anyway). */
+  neArke: boolean
 }
 
 export const CATALOG_SELECT = {
@@ -41,6 +43,7 @@ export const CATALOG_SELECT = {
   cmimiShitjesRi: true,
   cmimiBlerjesRi: true,
   sasiaVjeter: true,
+  neArke: true,
 } satisfies Prisma.ProductSelect
 
 type CatalogRow = Prisma.ProductGetPayload<{ select: typeof CATALOG_SELECT }>
@@ -61,5 +64,6 @@ export function toCatalogProduct(p: CatalogRow, showCost: boolean): CatalogProdu
     cmimiShitjesRi: p.cmimiShitjesRi,
     ...(showCost ? { cmimiBlerjesRi: p.cmimiBlerjesRi } : {}),
     sasiaVjeter: p.sasiaVjeter,
+    neArke: p.neArke,
   }
 }

@@ -162,8 +162,11 @@ function revalidateIfStale() {
   if (cache && !inflight && Date.now() - loadedAt > STALE_MS) void load(true)
 }
 
-/** Inserts or replaces rows by id, keeping everything else as it is. */
-function upsert(rows: CatalogProduct[]) {
+/**
+ * Inserts or replaces rows by id, keeping everything else as it is. Exported
+ * for rows the server just returned whole, e.g. after toggling a POS tile.
+ */
+export function upsertCatalog(rows: CatalogProduct[]) {
   if (rows.length === 0) return
   if (!cache) {
     rows.forEach((p) => early.set(p.id, p))
@@ -212,7 +215,7 @@ export function lookupBarcode(code: string): Promise<CatalogProduct | null> {
       if (res.status === 404) return null
       if (!res.ok) throw new Error('barcode lookup failed')
       const product = (await res.json()) as CatalogProduct
-      upsert([product])
+      upsertCatalog([product])
       return product
     } finally {
       lookups.delete(key)

@@ -53,6 +53,10 @@ model Product {
   sasiaVjeter    Float?
 
   njesia        String           @default("cope")
+  /// Shown as a tile on the POS because an admin added it there. kg products
+  /// are tiles anyway; this is for everything else (bread, ...). Added in
+  /// migration 5_product_pos_tile; snapshots taken before it restore as false.
+  neArke        Boolean          @default(false)
   furnitorId    Int?
   furnitor      Supplier?        @relation(fields: [furnitorId], references: [id])
   createdAt     DateTime         @default(now())

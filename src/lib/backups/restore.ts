@@ -104,6 +104,40 @@ export async function loadSnapshot(path: string): Promise<SnapshotFile> {
   return parseSnapshot(Buffer.from(await data.arrayBuffer()))
 }
 
+/**
+ * Columns added by migrations after snapshots already existed, with the value
+ * an older snapshot's rows should get. Applied only when the live table has
+ * the column and the snapshot's declared columns lack it — otherwise the
+ * exact-shape check in `plan` still decides. Additive migrations only: a
+ * dropped or renamed column must keep blocking the restore.
+ */
+const ADDED_COLUMNS: Array<{ table: string; column: string; type: string; value: unknown }> = [
+  // 5_product_pos_tile — older snapshots had no POS tiles chosen by hand.
+  { table: 'Product', column: 'neArke', type: 'bool', value: false },
+]
+
+/**
+ * Brings a snapshot taken before an additive migration up to the live shape,
+ * in place: declares the new column and gives every row its default. Snapshots
+ * written after the migration already carry it and are left alone.
+ */
+function upgradeSnapshot(snapshot: SnapshotFile, live: Record<string, string[]>) {
+  for (const { table, column, type, value } of ADDED_COLUMNS) {
+    const signature = `${column}:${type}`
+    const declared: unknown = snapshot.columns?.[table]
+    const rows: unknown = snapshot.tables?.[table]
+    if (!live[table]?.includes(signature)) continue
+    if (!Array.isArray(declared) || declared.some((c) => typeof c === 'string' && c.startsWith(`${column}:`))) continue
+    if (!Array.isArray(rows)) continue
+    snapshot.columns[table] = [...declared, signature].sort()
+    for (const row of rows) {
+      if (row && typeof row === 'object' && !Array.isArray(row) && !(column in row)) {
+        ;(row as Record<string, unknown>)[column] = value
+      }
+    }
+  }
+}
+
 interface Plan {
   /** Tables in insert order. */
   order: string[]
@@ -114,13 +148,15 @@ interface Plan {
 /**
  * Compares the snapshot's shape with the live schema. Any difference blocks
  * the restore — a snapshot taken before a migration cannot be loaded
- * faithfully into the schema after it.
+ * faithfully into the schema after it — except the additive columns listed
+ * in ADDED_COLUMNS, which are filled in first.
  */
 async function plan(db: Db, snapshot: SnapshotFile): Promise<Plan> {
   const tables = await businessTables(db)
   const live = await tableColumns(db, tables)
   const fks = await foreignKeys(db, tables)
   const problems: string[] = []
+  upgradeSnapshot(snapshot, live)
 
   const snapTables = Object.keys(snapshot.columns ?? {})
   for (const t of tables) {
