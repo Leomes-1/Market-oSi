@@ -26,6 +26,8 @@ export interface CatalogProduct {
   sasiaVjeter: number | null
   /** Admin put this product on the POS tiles (kg products are tiles anyway). */
   neArke: boolean
+  /** Tile group chosen by an admin; null = automatic. See lib/tile-groups. */
+  grupiArke: string | null
 }
 
 export const CATALOG_SELECT = {
@@ -44,6 +46,7 @@ export const CATALOG_SELECT = {
   cmimiBlerjesRi: true,
   sasiaVjeter: true,
   neArke: true,
+  grupiArke: true,
 } satisfies Prisma.ProductSelect
 
 type CatalogRow = Prisma.ProductGetPayload<{ select: typeof CATALOG_SELECT }>
@@ -65,5 +68,6 @@ export function toCatalogProduct(p: CatalogRow, showCost: boolean): CatalogProdu
     ...(showCost ? { cmimiBlerjesRi: p.cmimiBlerjesRi } : {}),
     sasiaVjeter: p.sasiaVjeter,
     neArke: p.neArke,
+    grupiArke: p.grupiArke,
   }
 }

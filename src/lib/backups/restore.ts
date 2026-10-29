@@ -121,6 +121,8 @@ const ADDED_COLUMNS: Array<{
   // An older snapshot gets the same: kg on, the rest off, so restoring it
   // doesn't leave the POS with no tiles.
   { table: 'Product', column: 'neArke', type: 'bool', value: (row) => row.njesia === 'kg' },
+  // 7_product_pos_group — no group chosen by hand yet: automatic.
+  { table: 'Product', column: 'grupiArke', type: 'text', value: () => null },
 ]
 
 /**

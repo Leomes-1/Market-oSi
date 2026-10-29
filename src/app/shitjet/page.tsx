@@ -12,7 +12,9 @@ import { findProducts, searchIndex } from '@/lib/product-search'
 import { tracksStock, weightForAmount } from '@/lib/validation'
 import BarcodeField, { type BarcodeFieldHandle } from '@/components/pos/BarcodeField'
 import AddTilePicker from '@/components/pos/AddTilePicker'
-import { TILE_GROUPS, tileEmoji, tileGroup } from '@/components/pos/tile-look'
+import { tileEmoji, tileGroup } from '@/components/pos/tile-look'
+import { TileGroupDialog } from '@/components/pos/TileGroupSelect'
+import { TILE_GROUPS, tileGroupLabel, type TileGroupKey } from '@/lib/tile-groups'
 import {
   RiAddLine,
   RiSubtractLine,
@@ -22,6 +24,7 @@ import {
   RiCheckLine,
   RiMenuLine,
   RiCloseLine,
+  RiMoreLine,
 } from 'react-icons/ri'
 import { useDesktopSidebar } from '@/components/layout/ClientLayout'
 
@@ -126,19 +129,24 @@ interface TileSection {
   products: Product[]
 }
 
-/** The POS tiles (neArke) in TILE_GROUPS order, alphabetical inside each group. */
+/**
+ * The POS tiles (neArke) in TILE_GROUPS order, alphabetical inside each
+ * group. The group is the admin's choice (grupiArke) or automatic.
+ */
 function groupTiles(products: Product[]): TileSection[] {
   const byGroup = new Map<string, Product[]>()
   for (const p of products) {
     if (!p.neArke) continue
-    const group = tileGroup(p.emri, p.kategoria)
+    const group = tileGroup(p)
     const list = byGroup.get(group)
     if (list) list.push(p)
     else byGroup.set(group, [p])
   }
-  return TILE_GROUPS.flatMap((title) => {
-    const list = byGroup.get(title)
-    return list ? [{ title, products: [...list].sort((a, b) => a.emri.localeCompare(b.emri, 'sq')) }] : []
+  return TILE_GROUPS.flatMap(({ key }) => {
+    const list = byGroup.get(key)
+    return list
+      ? [{ title: tileGroupLabel(key), products: [...list].sort((a, b) => a.emri.localeCompare(b.emri, 'sq')) }]
+      : []
   })
 }
 
@@ -149,13 +157,15 @@ interface ProductTileProps {
   onAdd: (product: Product) => void
   /** Admin, POS tiles only: shows × to take the product off the tiles. */
   onRemove?: (product: Product) => void
+  /** Admin, POS tiles only: shows ⋯ to move the tile to another group. */
+  onMove?: (product: Product) => void
 }
 
 /**
  * One product tile. Memoised: a cart change re-renders only the tile whose
  * line changed (unchanged lines keep their object identity), not all of them.
  */
-const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd, onRemove }: ProductTileProps) {
+const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd, onRemove, onMove }: ProductTileProps) {
   const tracked = tracksStock(product.njesia)
   const outOfStock = tracked && product.sasia <= 0
   const pending = pendingFor(product)
@@ -172,7 +182,7 @@ const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd, on
             : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm hover:scale-[1.01] active:scale-[0.98]'
         }`}
       >
-        <div className={`flex items-start justify-between mb-1.5 sm:mb-2 ${onRemove ? 'pr-5' : ''}`}>
+        <div className={`flex items-start justify-between mb-1.5 sm:mb-2 ${onMove ? 'pr-10' : onRemove ? 'pr-5' : ''}`}>
           <p className="font-medium text-slate-900 text-xs sm:text-sm leading-tight">
             <span className="mr-1" aria-hidden>{tileEmoji(product.emri, product.kategoria)}</span>
             {product.emri}
@@ -206,6 +216,17 @@ const ProductTile = memo(function ProductTile({ product, line: inCart, onAdd, on
           )}
         </div>
       </button>
+      {onMove && (
+        <button
+          type="button"
+          onClick={() => onMove(product)}
+          aria-label={`Ndrysho grupin e ${product.emri}`}
+          title="Ndrysho grupin"
+          className="absolute top-1.5 right-7 w-5 h-5 inline-flex items-center justify-center rounded-full text-slate-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+        >
+          <RiMoreLine className="text-sm" />
+        </button>
+      )}
       {onRemove && (
         // A sibling of the tile, not inside it: a button can't hold a button,
         // and a click here must not add the product to the cart.
@@ -227,8 +248,9 @@ interface ProductGridProps {
   sections: TileSection[]
   cart: CartItem[]
   onAdd: (product: Product) => void
-  /** Admin, POS tiles only: × on every tile and the "+ Shto produkt" tile. */
+  /** Admin, POS tiles only: × and ⋯ on every tile, and the "+ Shto produkt" tile. */
   onRemove?: (product: Product) => void
+  onMove?: (product: Product) => void
   onOpenPicker?: () => void
 }
 
@@ -238,7 +260,7 @@ interface ProductGridProps {
  * text settles; a cart change re-renders the grid but only the changed tile
  * (see ProductTile).
  */
-const ProductGrid = memo(function ProductGrid({ sections, cart, onAdd, onRemove, onOpenPicker }: ProductGridProps) {
+const ProductGrid = memo(function ProductGrid({ sections, cart, onAdd, onRemove, onMove, onOpenPicker }: ProductGridProps) {
   const lines = useMemo(() => new Map(cart.map((line) => [line.product.id, line])), [cart])
   return (
     <div className={TILE_GRID}>
@@ -256,6 +278,7 @@ const ProductGrid = memo(function ProductGrid({ sections, cart, onAdd, onRemove,
               line={lines.get(product.id)}
               onAdd={onAdd}
               onRemove={onRemove}
+              onMove={onMove}
             />
           ))}
         </Fragment>
@@ -289,6 +312,8 @@ export default function ShitjetPage() {
     findByBarcode,
   } = useCatalog()
   const [pickerOpen, setPickerOpen] = useState(false)
+  // The tile whose group the ⋯ dialog is changing; null = closed.
+  const [groupFor, setGroupFor] = useState<Product | null>(null)
   const [cart, setCart] = useState<CartItem[]>([])
   const [loading, setLoading] = useState(false)
   const [receiptModal, setReceiptModal] = useState<CompletedSale | null>(null)
@@ -364,7 +389,7 @@ export default function ShitjetPage() {
   // Same for the "+ Shto produkt" picker: clicks inside it must not pull
   // focus back to the field behind it.
   const pickerOpenRef = useRef(false)
-  useEffect(() => { pickerOpenRef.current = pickerOpen }, [pickerOpen])
+  useEffect(() => { pickerOpenRef.current = pickerOpen || !!groupFor }, [pickerOpen, groupFor])
 
   // Refocus barcode when receipt modal is dismissed
   useEffect(() => {
@@ -606,29 +631,52 @@ export default function ShitjetPage() {
   const onQuery = useCallback((q: string) => setQuery(q), [])
 
   /** Puts a product on the tiles or takes it off. Admin only (server-checked). */
-  async function setTile(product: Product, neArke: boolean) {
+  /**
+   * Saves a tile's place: on/off and/or its group (null = Automatik). Admin
+   * only (server-checked). Resolves true once the server has it.
+   */
+  async function saveTile(
+    product: Product,
+    patch: { neArke?: boolean; grupiArke?: TileGroupKey | null },
+    done: string
+  ): Promise<boolean> {
     try {
       const res = await fetch(`/api/products/${product.id}/tile`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ neArke }),
+        body: JSON.stringify(patch),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => null)
         toast.error(err?.error || 'Pllaka nuk u ruajt')
-        return
+        return false
       }
       upsertCatalog([(await res.json()) as Product])
-      toast.success(neArke ? `${product.emri} u shtua te pllakat` : `${product.emri} u hoq nga pllakat`)
+      toast.success(done)
+      return true
     } catch {
       toast.error('Pllaka nuk u ruajt — kontrollo lidhjen')
+      return false
     }
   }
 
-  const setTileRef = useRef(setTile)
-  setTileRef.current = setTile
-  const onRemoveTile = useCallback((product: Product) => { void setTileRef.current(product, false) }, [])
-  const onAddTile = useCallback((product: Product) => setTileRef.current(product, true), [])
+  const saveTileRef = useRef(saveTile)
+  saveTileRef.current = saveTile
+  const onRemoveTile = useCallback((product: Product) => {
+    void saveTileRef.current(product, { neArke: false }, `${product.emri} u hoq nga pllakat`)
+  }, [])
+  const onAddTile = useCallback(async (product: Product, grupiArke: TileGroupKey | null) => {
+    await saveTileRef.current(product, { neArke: true, grupiArke }, `${product.emri} u shtua te pllakat`)
+  }, [])
+  const onMoveTile = useCallback((product: Product) => setGroupFor(product), [])
+  const onCloseGroup = useCallback(() => {
+    setGroupFor(null)
+    setTimeout(() => barcodeRef.current?.focus(), 100)
+  }, [])
+  const onSaveGroup = useCallback(async (product: Product, grupiArke: TileGroupKey | null) => {
+    const label = grupiArke ? tileGroupLabel(grupiArke) : 'Automatik'
+    if (await saveTileRef.current(product, { grupiArke }, `${product.emri} → ${label}`)) onCloseGroup()
+  }, [onCloseGroup])
   const onOpenPicker = useCallback(() => setPickerOpen(true), [])
   const onClosePicker = useCallback(() => {
     setPickerOpen(false)
@@ -940,6 +988,7 @@ export default function ShitjetPage() {
                   cart={cart}
                   onAdd={onAddProduct}
                   onRemove={isAdmin && !searching ? onRemoveTile : undefined}
+                  onMove={isAdmin && !searching ? onMoveTile : undefined}
                   onOpenPicker={isAdmin && !searching ? onOpenPicker : undefined}
                 />
               </>
@@ -1129,6 +1178,9 @@ export default function ShitjetPage() {
 
       </div>{/* ── end content area ── */}
 
+      {isAdmin && (
+        <TileGroupDialog product={groupFor} onClose={onCloseGroup} onSave={onSaveGroup} />
+      )}
       {isAdmin && (
         <AddTilePicker
           isOpen={pickerOpen}

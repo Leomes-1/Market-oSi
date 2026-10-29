@@ -57,6 +57,11 @@ model Product {
   /// are tiles anyway; this is for everything else (bread, ...). Added in
   /// migration 5_product_pos_tile; snapshots taken before it restore as false.
   neArke        Boolean          @default(false)
+  /// POS tile group chosen by an admin (buke, fruta_perime, mish_pule,
+  /// djathe_bulmet, embelsira, te_tjera); null = picked automatically from
+  /// the name and category. Validated by the API, not the database. Added in
+  /// migration 7_product_pos_group; older snapshots restore as null.
+  grupiArke     String?
   furnitorId    Int?
   furnitor      Supplier?        @relation(fields: [furnitorId], references: [id])
   createdAt     DateTime         @default(now())
