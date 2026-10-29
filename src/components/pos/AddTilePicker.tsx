@@ -15,12 +15,13 @@ interface AddTilePickerProps {
   onAdd: (product: CatalogProduct) => Promise<void>
 }
 
-/** Products that can still be added: not kg (tiles anyway), not added yet. */
-const addable = (p: CatalogProduct) => p.njesia !== 'kg' && !p.neArke
+/** Products that can still be added: everything not on the tiles yet. */
+const addable = (p: CatalogProduct) => !p.neArke
 
 /**
  * "+ Shto produkt": search the catalogue and add a product to the POS tiles.
  * Stays open after an add, so several products (all the bread) go in one go.
+ * A kg product taken off with × can be put back here too.
  */
 export default function AddTilePicker({ isOpen, onClose, products, onAdd }: AddTilePickerProps) {
   const [query, setQuery] = useState('')
@@ -58,7 +59,7 @@ export default function AddTilePicker({ isOpen, onClose, products, onAdd }: AddT
         )}
         {query.trim() === '' ? (
           <p className="text-xs text-slate-400 px-1">
-            Shkruaj emrin e produktit. Produktet me kg shfaqen gjithmonë, nuk kanë nevojë të shtohen.
+            Shkruaj emrin ose barkodin e produktit që do të shfaqet si pllakë.
           </p>
         ) : results.length === 0 ? (
           <p className="text-sm text-slate-400 text-center py-6">Nuk u gjet asnjë produkt për t&apos;u shtuar</p>

@@ -111,14 +111,21 @@ export async function loadSnapshot(path: string): Promise<SnapshotFile> {
  * exact-shape check in `plan` still decides. Additive migrations only: a
  * dropped or renamed column must keep blocking the restore.
  */
-const ADDED_COLUMNS: Array<{ table: string; column: string; type: string; value: unknown }> = [
-  // 5_product_pos_tile — older snapshots had no POS tiles chosen by hand.
-  { table: 'Product', column: 'neArke', type: 'bool', value: false },
+const ADDED_COLUMNS: Array<{
+  table: string
+  column: string
+  type: string
+  value: (row: Record<string, unknown>) => unknown
+}> = [
+  // 5_product_pos_tile, then 6_kg_tiles_on put every kg product on the tiles.
+  // An older snapshot gets the same: kg on, the rest off, so restoring it
+  // doesn't leave the POS with no tiles.
+  { table: 'Product', column: 'neArke', type: 'bool', value: (row) => row.njesia === 'kg' },
 ]
 
 /**
  * Brings a snapshot taken before an additive migration up to the live shape,
- * in place: declares the new column and gives every row its default. Snapshots
+ * in place: declares the new column and gives every row its value. Snapshots
  * written after the migration already carry it and are left alone.
  */
 function upgradeSnapshot(snapshot: SnapshotFile, live: Record<string, string[]>) {
@@ -132,8 +139,49 @@ function upgradeSnapshot(snapshot: SnapshotFile, live: Record<string, string[]>)
     snapshot.columns[table] = [...declared, signature].sort()
     for (const row of rows) {
       if (row && typeof row === 'object' && !Array.isArray(row) && !(column in row)) {
-        ;(row as Record<string, unknown>)[column] = value
+        const record = row as Record<string, unknown>
+        record[column] = value(record)
       }
+    }
+  }
+}
+
+/**
+ * Data-only migrations that a restore must replay on older snapshots. A
+ * snapshot created before the migration finished (its createdAt earlier than
+ * the migration's finished_at in _prisma_migrations) gets `apply` run on each
+ * row of `table`. Nothing happens if the migration isn't applied to this
+ * database yet — then the live data predates it too.
+ */
+const DATA_MIGRATIONS: Array<{
+  migration: string
+  table: string
+  apply: (row: Record<string, unknown>) => void
+}> = [
+  // 6_kg_tiles_on: every kg product went onto the POS tiles. Without this, a
+  // snapshot from between migrations 5 and 6 would restore with no kg tiles.
+  {
+    migration: '6_kg_tiles_on',
+    table: 'Product',
+    apply: (row) => {
+      if (row.njesia === 'kg') row.neArke = true
+    },
+  },
+]
+
+async function replayDataMigrations(db: Db, snapshot: SnapshotFile) {
+  const createdAt = new Date(snapshot.createdAt).getTime()
+  if (!Number.isFinite(createdAt)) return
+  for (const { migration, table, apply } of DATA_MIGRATIONS) {
+    const [row] = await db.$queryRaw<{ finishedAt: Date | null }[]>`
+      SELECT finished_at AS "finishedAt" FROM "public"."_prisma_migrations"
+      WHERE migration_name = ${migration} AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+      ORDER BY finished_at LIMIT 1`
+    if (!row?.finishedAt || createdAt >= row.finishedAt.getTime()) continue
+    const rows: unknown = snapshot.tables?.[table]
+    if (!Array.isArray(rows)) continue
+    for (const r of rows) {
+      if (r && typeof r === 'object' && !Array.isArray(r)) apply(r as Record<string, unknown>)
     }
   }
 }
@@ -149,7 +197,8 @@ interface Plan {
  * Compares the snapshot's shape with the live schema. Any difference blocks
  * the restore — a snapshot taken before a migration cannot be loaded
  * faithfully into the schema after it — except the additive columns listed
- * in ADDED_COLUMNS, which are filled in first.
+ * in ADDED_COLUMNS, which are filled in first. Data-only migrations the
+ * snapshot predates (DATA_MIGRATIONS) are replayed on its rows.
  */
 async function plan(db: Db, snapshot: SnapshotFile): Promise<Plan> {
   const tables = await businessTables(db)
@@ -157,6 +206,7 @@ async function plan(db: Db, snapshot: SnapshotFile): Promise<Plan> {
   const fks = await foreignKeys(db, tables)
   const problems: string[] = []
   upgradeSnapshot(snapshot, live)
+  await replayDataMigrations(db, snapshot)
 
   const snapTables = Object.keys(snapshot.columns ?? {})
   for (const t of tables) {

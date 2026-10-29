@@ -1,74 +1,83 @@
 /**
- * How a POS tile looks: an emoji picked from the product's name, and a soft
- * background per category. Edit the lists below to change either.
- *
- * Lives under components/ (not lib/) because Tailwind only scans components/
- * and app/ for class names — the colour classes must appear here in full.
+ * How a POS tile is recognised and sorted: a small emoji and a group, both
+ * picked from keywords in the product's name, with the category as fallback.
+ * Edit the lists below to change either.
  */
 
 import { plain } from '@/lib/product-search'
 
+/** Tile groups, in the order they appear on the POS. */
+export const TILE_GROUPS = ['Bukë', 'Fruta & Perime', 'Mish & Pulë', 'Djathë & Bulmet', 'Ëmbëlsira', 'Të tjera'] as const
+export type TileGroup = (typeof TILE_GROUPS)[number]
+
+const BUKE: TileGroup = 'Bukë'
+const FRUTA: TileGroup = 'Fruta & Perime'
+const MISH: TileGroup = 'Mish & Pulë'
+const BULMET: TileGroup = 'Djathë & Bulmet'
+const EMBEL: TileGroup = 'Ëmbëlsira'
+
 /**
- * Keyword → emoji, matched against the start of any word in the name,
- * accent-free. First match wins, so put the more specific words first
- * ("kruasan" before "buke", "speca" before generic vegetables).
+ * Keyword → emoji (and group, when the word decides it), matched against the
+ * start of any word in the name, accent-free. First match wins, so put the
+ * more specific words first ("kruasan" before "buke", "karamel" before
+ * "kafe"). No group → the category decides (CATEGORY_GROUP).
  */
-const KEYWORD_EMOJI: Array<[string[], string]> = [
-  [['domate'], '🍅'],
-  [['kastravec'], '🥒'],
-  [['qepe'], '🧅'],
-  [['hudher'], '🧄'],
-  [['patate'], '🥔'],
-  [['karrot'], '🥕'],
-  [['speca', 'speci', 'specat'], '🫑'],
-  [['djeges'], '🌶️'],
-  [['sallat', 'salat', 'marule', 'spinaq', 'lakra', 'laker'], '🥬'],
-  [['brokoli'], '🥦'],
-  [['patellxhan'], '🍆'],
-  [['kungull'], '🎃'],
-  [['misr'], '🌽'],
-  [['kerpudh'], '🍄'],
+const KEYWORDS_RAW: Array<[string[], string, TileGroup?]> = [
+  [['domate'], '🍅', FRUTA],
+  [['kastravec'], '🥒', FRUTA],
+  [['qepe'], '🧅', FRUTA],
+  [['hudher'], '🧄', FRUTA],
+  [['patate'], '🥔', FRUTA],
+  [['karrot'], '🥕', FRUTA],
+  [['speca', 'speci', 'specat'], '🫑', FRUTA],
+  [['djeges'], '🌶️', FRUTA],
+  [['sallat', 'salat', 'marule', 'spinaq', 'lakra', 'laker'], '🥬', FRUTA],
+  [['brokoli'], '🥦', FRUTA],
+  [['patellxhan'], '🍆', FRUTA],
+  [['kungull'], '🎃', FRUTA],
+  [['misr'], '🌽', FRUTA],
+  [['kerpudh'], '🍄', FRUTA],
   [['fasule', 'groshe'], '🫘'],
-  [['molle'], '🍎'],
-  [['dardh'], '🍐'],
-  [['banane'], '🍌'],
-  [['portokall', 'mandarin'], '🍊'],
-  [['limon'], '🍋'],
-  [['rrush'], '🍇'],
-  [['shalqi'], '🍉'],
-  [['pjeper'], '🍈'],
-  [['luleshtrydh', 'dredhez'], '🍓'],
-  [['qershi', 'vishnj'], '🍒'],
-  [['pjeshk', 'kajsi'], '🍑'],
-  [['ananas'], '🍍'],
-  [['kivi'], '🥝'],
-  [['avokado'], '🥑'],
+  [['molle'], '🍎', FRUTA],
+  [['dardh'], '🍐', FRUTA],
+  [['banane'], '🍌', FRUTA],
+  [['portokall', 'mandarin'], '🍊', FRUTA],
+  [['limon'], '🍋', FRUTA],
+  [['rrush'], '🍇', FRUTA],
+  [['shalqi'], '🍉', FRUTA],
+  [['pjeper'], '🍈', FRUTA],
+  [['luleshtrydh', 'dredhez'], '🍓', FRUTA],
+  [['qershi', 'vishnj'], '🍒', FRUTA],
+  [['pjeshk', 'kajsi'], '🍑', FRUTA],
+  [['ananas'], '🍍', FRUTA],
+  [['kivi'], '🥝', FRUTA],
+  [['avokado'], '🥑', FRUTA],
   [['arra', 'lajthi', 'bajame', 'kikirik', 'fistik'], '🥜'],
   [['ullinj', 'ulli'], '🫒'],
-  [['djath', 'kackavall'], '🧀'],
+  [['djath', 'kackavall'], '🧀', BULMET],
   [['veze'], '🥚'],
-  [['qumesht', 'kos'], '🥛'],
-  [['mish', 'sallam', 'proshute'], '🥩'],
-  [['pule', 'pula', 'krahe', 'kofshe', 'cung'], '🍗'],
-  [['peshk'], '🐟'],
-  [['kruasan', 'croissant'], '🥐'],
-  [['baguette', 'baget'], '🥖'],
-  [['simit', 'gjevrek'], '🥯'],
-  [['byrek', 'pite'], '🥧'],
-  [['buke', 'franxholl'], '🍞'],
-  [['karamel'], '🍬'],
+  [['qumesht', 'kos'], '🥛', BULMET],
+  [['mish', 'sallam', 'proshute'], '🥩', MISH],
+  [['pule', 'pula', 'krahe', 'kofshe', 'cung', 'fileto'], '🍗', MISH],
+  [['peshk'], '🐟', MISH],
+  [['kruasan', 'croissant'], '🥐', BUKE],
+  [['baguette', 'baget'], '🥖', BUKE],
+  [['simit', 'gjevrek'], '🥯', BUKE],
+  [['byrek', 'pite'], '🥧', BUKE],
+  [['buke', 'franxholl'], '🍞', BUKE],
+  [['karamel'], '🍬', EMBEL],
   [['oriz'], '🍚'],
   [['makarona', 'spageti'], '🍝'],
   [['sheqer'], '🍬'],
   [['kafe'], '☕'],
   [['caj'], '🍵'],
   [['mjalte'], '🍯'],
-  [['akullore'], '🍦'],
-  [['cokollat', 'cokolate'], '🍫'],
-  [['biskot'], '🍪'],
+  [['akullore'], '🍦', EMBEL],
+  [['cokollat', 'cokolate'], '🍫', EMBEL],
+  [['biskot'], '🍪', EMBEL],
 ]
 
-/** Fallback when no keyword matches. Keys are the category names as stored. */
+/** Emoji when no keyword matches. Keys are the category names as stored. */
 const CATEGORY_EMOJI: Record<string, string> = {
   'Fruta/Perime': '🥗',
   Fresh: '🥛',
@@ -84,32 +93,24 @@ const CATEGORY_EMOJI: Record<string, string> = {
 
 const GENERAL_EMOJI = '🛍️'
 
-/** Soft tile background + border per category (idle state, not in the cart). */
-const CATEGORY_TONE: Record<string, string> = {
-  'Fruta/Perime': 'bg-green-50 border-green-200 hover:border-green-400',
-  Fresh: 'bg-sky-50 border-sky-200 hover:border-sky-400',
-  'Të Ëmbla': 'bg-pink-50 border-pink-200 hover:border-pink-400',
-  'Të Kripura': 'bg-yellow-50 border-yellow-200 hover:border-yellow-400',
-  'Të Ngrira': 'bg-cyan-50 border-cyan-200 hover:border-cyan-400',
-  Ushqimore: 'bg-amber-50 border-amber-200 hover:border-amber-400',
-  'Lëngje': 'bg-orange-50 border-orange-200 hover:border-orange-400',
-  Higjena: 'bg-violet-50 border-violet-200 hover:border-violet-400',
-  Pastrimi: 'bg-teal-50 border-teal-200 hover:border-teal-400',
-  'Të Ndryshme': 'bg-slate-50 border-slate-200 hover:border-slate-400',
+/** Group when no keyword decides it. Unlisted categories go to "Të tjera". */
+const CATEGORY_GROUP: Record<string, TileGroup> = {
+  'Fruta/Perime': FRUTA,
+  Fresh: BULMET,
+  'Të Ëmbla': EMBEL,
 }
 
-const GENERAL_TONE = 'bg-white border-slate-200 hover:border-blue-300'
+const KEYWORDS = KEYWORDS_RAW.map(([words, emoji, group]) => [words.map(plain), emoji, group] as const)
 
-const KEYWORDS = KEYWORD_EMOJI.map(([words, emoji]) => [words.map(plain), emoji] as const)
+function keywordFor(emri: string) {
+  const words = plain(emri).split(/[^a-z0-9]+/).filter(Boolean)
+  return KEYWORDS.find(([keys]) => keys.some((k) => words.some((w) => w.startsWith(k))))
+}
 
 export function tileEmoji(emri: string, kategoria: string): string {
-  const words = plain(emri).split(/[^a-z0-9]+/).filter(Boolean)
-  for (const [keys, emoji] of KEYWORDS) {
-    if (keys.some((k) => words.some((w) => w.startsWith(k)))) return emoji
-  }
-  return CATEGORY_EMOJI[kategoria] ?? GENERAL_EMOJI
+  return keywordFor(emri)?.[1] ?? CATEGORY_EMOJI[kategoria] ?? GENERAL_EMOJI
 }
 
-export function tileTone(kategoria: string): string {
-  return CATEGORY_TONE[kategoria] ?? GENERAL_TONE
+export function tileGroup(emri: string, kategoria: string): TileGroup {
+  return keywordFor(emri)?.[2] ?? CATEGORY_GROUP[kategoria] ?? 'Të tjera'
 }

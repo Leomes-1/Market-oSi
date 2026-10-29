@@ -138,6 +138,9 @@ export async function POST(req: NextRequest) {
         cmimiBlerjes: blerjes.value,
         cmimiShitjes: shitjes.value,
         njesia: unit,
+        // Loose kg goods go straight onto the POS tiles; an admin can take
+        // one off with ×. Other units start off the tiles.
+        neArke: unit === 'kg',
         furnitorId: furnitorId ? Number(furnitorId) : null,
         barcodes: {
           create: validBarcodes.map((barcode) => ({ barcode })),

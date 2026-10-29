@@ -1,8 +1,8 @@
 import type { CatalogProduct } from './catalog-shape'
 
 /**
- * Name search for the POS field and the "+ Shto produkt" picker, run against
- * the cached catalogue in the browser — no request per keystroke.
+ * Product search for the POS field and the "+ Shto produkt" picker, run
+ * against the cached catalogue in the browser — no request per keystroke.
  */
 
 /** Lower-case, without ë/ç and other accents, so "Qepë" and "qepe" match alike. */
@@ -13,22 +13,27 @@ export function plain(text: string): string {
 export interface SearchEntry {
   product: CatalogProduct
   name: string
+  /** Name and category together, for multi-word queries across both. */
+  text: string
 }
 
 /** Accent-free names, computed once per catalogue rather than per keystroke. */
 export function searchIndex(products: CatalogProduct[]): SearchEntry[] {
-  return products.map((product) => ({ product, name: plain(product.emri) }))
+  return products.map((product) => {
+    const name = plain(product.emri)
+    return { product, name, text: `${name} ${plain(product.kategoria)}` }
+  })
 }
 
 /**
- * Products whose name contains every typed word (accents ignored), names that
- * start with the query first. A query of digits also matches barcodes by
- * prefix, so a partly typed code still finds its product.
+ * Products whose name or category contains every typed word (accents
+ * ignored), or whose barcode contains the typed digits. Names that start with
+ * the query come first.
  */
 export function findProducts(
   index: SearchEntry[],
   query: string,
-  limit: number,
+  limit = Infinity,
   accept: (p: CatalogProduct) => boolean = () => true
 ): CatalogProduct[] {
   const q = plain(query).trim()
@@ -38,10 +43,10 @@ export function findProducts(
 
   const first: CatalogProduct[] = []
   const rest: CatalogProduct[] = []
-  for (const { product, name } of index) {
+  for (const { product, name, text } of index) {
     if (!accept(product)) continue
-    const byName = words.every((w) => name.includes(w))
-    if (!byName && !(digits && product.barcodes.some((b) => b.startsWith(q)))) continue
+    const byText = words.every((w) => text.includes(w))
+    if (!byText && !(digits && product.barcodes.some((b) => b.includes(q)))) continue
     if (name.startsWith(q)) {
       first.push(product)
       if (first.length === limit) break
