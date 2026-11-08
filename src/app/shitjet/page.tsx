@@ -1032,7 +1032,7 @@ export default function ShitjetPage() {
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {cart.map((item) => (
+                  {cart.map((item, idx) => (
                     <div
                       key={item.product.id}
                       ref={(el: HTMLDivElement | null) => {
@@ -1045,6 +1045,7 @@ export default function ShitjetPage() {
                     >
                       <div className="flex items-start justify-between mb-2">
                         <p className="text-sm font-medium text-slate-800 leading-tight flex-1 pr-2">
+                          <span className="text-xs font-normal text-slate-400 tabular-nums mr-2">{idx + 1}</span>
                           {item.product.emri}
                         </p>
                         <button
