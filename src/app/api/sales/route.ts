@@ -181,6 +181,7 @@ export async function POST(req: NextRequest) {
         cmimiBlerjes: number
         cmimiShitjes: number
         fitimi: number
+        sasiaFaturuar: number
       }> = []
 
       for (const line of validated) {
@@ -190,6 +191,7 @@ export async function POST(req: NextRequest) {
         // for kg lines a plain row lock. Either way it returns the row as
         // committed under the lock — prices and pending-change counters are
         // the current values, not what a concurrent sale saw earlier.
+        // Invoiced (Me TVSH) units are taken first, in that same statement.
         const locked = await takeAndLock(tx, line.productId, line.sasia, line.tracked)
         if (!locked) {
           // Only a tracked line can miss: the guard found too little stock.
@@ -222,6 +224,7 @@ export async function POST(req: NextRequest) {
           cmimiBlerjes: pricing.cmimiBlerjes,
           cmimiShitjes,
           fitimi: lineFitimi,
+          sasiaFaturuar: locked.ngaFaturuar,
         })
       }
 

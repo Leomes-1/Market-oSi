@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, parseId, success } from '@/lib/api'
 import { tracksStock } from '@/lib/validation'
+import { returnStock } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 /**
@@ -31,12 +32,10 @@ export async function DELETE(
       if (!entry) throw new ApiFailure('Regjistrimi nuk u gjet', 404, 'NOT_FOUND')
 
       for (const item of entry.items) {
-        // Untracked (kg) products never had stock taken out.
+        // Untracked (kg) products never had stock taken out. Invoiced units
+        // go back into invoiced stock.
         if (!tracksStock(item.njesia)) continue
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { sasia: { increment: item.sasia } },
-        })
+        await returnStock(tx, item.productId, item.sasia, item.sasiaFaturuar)
       }
 
       // Cascade removes the lines.

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
-import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
+import { ApiFailure, apiError, badRequest, handleApiError } from '@/lib/api'
 import { tracksStock, validatePrice, validateQuantity } from '@/lib/validation'
 import { planPriceUpdate, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
+import { hideInvoiceFields, parseInvoiceFields } from '@/lib/inventari'
 
 const SUPPLY_INCLUDE = {
   furnitor: { select: { id: true, emri: true } },
@@ -24,7 +25,7 @@ const PAGE_SIZE = 100
  * joined in here (the POST response still carries them).
  */
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(['admin', 'staff'])
+  const { role, error } = await requireRole(['admin', 'staff'])
   if (error) return error
 
   try {
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
     const hasMore = page.length > PAGE_SIZE
     const supplies = hasMore ? page.slice(0, PAGE_SIZE) : page
     return NextResponse.json({
-      supplies,
+      supplies: role === 'admin' ? supplies : supplies.map(hideInvoiceFields),
       nextCursor: hasMore ? supplies[supplies.length - 1].id : null,
     })
   } catch (error) {
@@ -49,12 +50,19 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole(['admin', 'staff'])
+  const { role, error } = await requireRole(['admin', 'staff'])
   if (error) return error
 
   try {
     const body = await req.json()
     const { furnitorId, data, shenime, items } = body
+
+    // "Me TVSH" and the invoice number are Inventari data: admin only.
+    const invoice = parseInvoiceFields(body)
+    if (!invoice.ok) return badRequest(invoice.error)
+    if (role !== 'admin' && (invoice.meTvsh || invoice.nrFatures)) {
+      return apiError('Vetëm admini mund të shënojë furnizim me TVSH', 403, 'FORBIDDEN')
+    }
 
     if (!Array.isArray(items) || items.length === 0) {
       return badRequest('Nuk ka produkte në furnizim')
@@ -152,6 +160,8 @@ export async function POST(req: NextRequest) {
           data: deliveryDate,
           shenime: typeof shenime === 'string' && shenime.trim() ? shenime.trim() : null,
           totali,
+          meTvsh: invoice.meTvsh,
+          nrFatures: invoice.nrFatures,
           items: {
             create: itemData.map(({ updatePrice: _skip, ...rest }) => rest),
           },
@@ -168,7 +178,10 @@ export async function POST(req: NextRequest) {
           select: PRICED_PRODUCT_SELECT,
         })
 
-        // Untracked (kg) products record the delivery but keep no stock count.
+        // Untracked (kg) products record the delivery but keep no stock count,
+        // so a "Me TVSH" kg line only shows up in the invoiced purchases.
+        // Tracked units of a "Me TVSH" supply also go into invoiced stock, in
+        // the same statement as the stock itself.
         const tracked = tracksStock(item.njesia)
         const priceData = item.updatePrice
           ? planPriceUpdate(
@@ -187,6 +200,7 @@ export async function POST(req: NextRequest) {
           where: { id: item.productId },
           data: {
             ...(tracked ? { sasia: { increment: item.sasia } } : {}),
+            ...(tracked && invoice.meTvsh ? { sasiaFaturuar: { increment: item.sasia } } : {}),
             ...priceData,
           },
         })
@@ -196,7 +210,7 @@ export async function POST(req: NextRequest) {
     })
 
     scheduleSnapshot()
-    return NextResponse.json(supply, { status: 201 })
+    return NextResponse.json(role === 'admin' ? supply : hideInvoiceFields(supply), { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Supplies POST')
   }

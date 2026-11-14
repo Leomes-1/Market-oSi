@@ -36,6 +36,9 @@ interface Supply {
   data: string
   shenime: string | null
   totali: number
+  /** Admin only — the API leaves these out for staff. */
+  meTvsh?: boolean
+  nrFatures?: string | null
   createdAt: string
   items: SupplyItemData[]
 }
@@ -64,6 +67,42 @@ export default function FurnizimePage() {
   const [selectedSupply, setSelectedSupply] = useState<Supply | null>(null)
   const [supplyToDelete, setSupplyToDelete] = useState<Supply | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // Inventari edit (admin): "Me TVSH" and the invoice number.
+  const [editMeTvsh, setEditMeTvsh] = useState(false)
+  const [editNrFatures, setEditNrFatures] = useState('')
+  const [savingInvoice, setSavingInvoice] = useState(false)
+
+  const openDetails = (supply: Supply) => {
+    setSelectedSupply(supply)
+    setEditMeTvsh(supply.meTvsh ?? false)
+    setEditNrFatures(supply.nrFatures ?? '')
+  }
+
+  const saveInvoice = async () => {
+    if (!selectedSupply) return
+    setSavingInvoice(true)
+    try {
+      const res = await fetch(`/api/supplies/${selectedSupply.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meTvsh: editMeTvsh, nrFatures: editNrFatures.trim() || null }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(body.error || 'Ruajtja dështoi', { duration: 6000 })
+        return
+      }
+      toast.success('Furnizimi u përditësua')
+      const patch = { meTvsh: body.meTvsh as boolean, nrFatures: body.nrFatures as string | null }
+      setSupplies((prev) => prev.map((s) => (s.id === selectedSupply.id ? { ...s, ...patch } : s)))
+      setSelectedSupply((prev) => (prev ? { ...prev, ...patch } : prev))
+    } catch {
+      toast.error('Ruajtja dështoi')
+    } finally {
+      setSavingInvoice(false)
+    }
+  }
 
   // Bumped on every reload, so a slower earlier load can't append its pages
   // to a newer list.
@@ -112,7 +151,12 @@ export default function FurnizimePage() {
     setDeleting(true)
     try {
       const res = await fetch(`/api/supplies/${supplyToDelete.id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error()
+      if (!res.ok) {
+        // The server names the product that blocks it (stock already sold).
+        const body = await res.json().catch(() => ({}))
+        toast.error(body.error || 'Fshirja dështoi', { duration: 8000 })
+        return
+      }
       toast.success('Furnizimi u fshi. Stoku u përditësua.')
       setSupplyToDelete(null)
       fetchSupplies()
@@ -238,6 +282,11 @@ export default function FurnizimePage() {
                   >
                     <td className="table-td font-mono font-semibold text-blue-600">
                       #{supply.id}
+                      {supply.meTvsh && (
+                        <span className="ml-2 font-sans text-[11px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          TVSH
+                        </span>
+                      )}
                     </td>
                     <td className="table-td text-slate-500">
                       {formatDate(supply.data)}
@@ -263,7 +312,7 @@ export default function FurnizimePage() {
                     </td>
                     <td className="table-td text-center">
                       <button
-                        onClick={() => setSelectedSupply(supply)}
+                        onClick={() => openDetails(supply)}
                         className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                         title="Shiko detajet"
                       >
@@ -307,6 +356,12 @@ export default function FurnizimePage() {
                 <p className="text-xs text-slate-400 mb-0.5">Data</p>
                 <p className="font-medium text-slate-900">{formatDate(selectedSupply.data)}</p>
               </div>
+              {selectedSupply.nrFatures && (
+                <div>
+                  <p className="text-xs text-slate-400 mb-0.5">Nr. i faturës</p>
+                  <p className="font-medium text-slate-900">{selectedSupply.nrFatures}</p>
+                </div>
+              )}
               {selectedSupply.shenime && (
                 <div className="col-span-2">
                   <p className="text-xs text-slate-400 mb-0.5">Shënime</p>
@@ -358,6 +413,45 @@ export default function FurnizimePage() {
               </div>
             </div>
 
+            {role === 'admin' && (
+              <div className="border border-slate-200 rounded-xl p-4 mb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 whitespace-nowrap cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={editMeTvsh}
+                      onChange={(e) => setEditMeTvsh(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Me TVSH
+                  </label>
+                  <input
+                    type="text"
+                    value={editNrFatures}
+                    onChange={(e) => setEditNrFatures(e.target.value)}
+                    placeholder="Nr. i faturës (opsional)"
+                    maxLength={60}
+                    className="input text-sm flex-1"
+                    aria-label="Numri i faturës"
+                  />
+                  <button
+                    onClick={saveInvoice}
+                    disabled={
+                      savingInvoice ||
+                      (editMeTvsh === (selectedSupply.meTvsh ?? false) &&
+                        (editNrFatures.trim() || null) === (selectedSupply.nrFatures ?? null))
+                    }
+                    className="btn-primary whitespace-nowrap"
+                  >
+                    {savingInvoice ? 'Duke ruajtur...' : 'Ruaj'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">
+                  Me TVSH: njësitë e këtij furnizimi numërohen edhe te stoku me faturë.
+                </p>
+              </div>
+            )}
+
             <button onClick={() => setSelectedSupply(null)} className="btn-secondary w-full">
               Mbyll
             </button>
@@ -400,6 +494,7 @@ export default function FurnizimePage() {
             </div>
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5">
               Stoku i produkteve do të ulet automatikisht pas fshirjes.
+              {supplyToDelete.meTvsh && ' Edhe stoku me faturë do të ulet.'}
             </p>
             <div className="flex gap-3">
               <button

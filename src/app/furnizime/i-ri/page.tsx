@@ -45,6 +45,9 @@ export default function FurnizimIRiPage() {
   const [salePrice, setSalePrice] = useState<Record<number, number>>({})
   const [updatePrice, setUpdatePrice] = useState<Record<number, boolean>>({})
   const [extraIds, setExtraIds] = useState<number[]>([])
+  // Inventari (admin only): the supply came with a VAT invoice.
+  const [meTvsh, setMeTvsh] = useState(false)
+  const [nrFatures, setNrFatures] = useState('')
   const [saving, setSaving] = useState(false)
 
   // Suppliers are derived from the catalogue, so the page needs no extra fetch.
@@ -221,6 +224,7 @@ export default function FurnizimIRiPage() {
           data,
           shenime: shenime || null,
           items: entered,
+          ...(role === 'admin' ? { meTvsh, nrFatures: nrFatures.trim() || null } : {}),
         }),
       })
       if (!res.ok) {
@@ -389,6 +393,28 @@ export default function FurnizimIRiPage() {
                 className="input flex-1 text-sm"
                 aria-label="Shënime"
               />
+              {role === 'admin' && (
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 whitespace-nowrap cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={meTvsh}
+                      onChange={(e) => setMeTvsh(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Me TVSH
+                  </label>
+                  <input
+                    type="text"
+                    value={nrFatures}
+                    onChange={(e) => setNrFatures(e.target.value)}
+                    placeholder="Nr. i faturës (opsional)"
+                    maxLength={60}
+                    className="input text-sm w-full sm:w-48"
+                    aria-label="Numri i faturës"
+                  />
+                </div>
+              )}
               <div className="flex items-center gap-4 sm:ml-auto">
                 <div className="text-sm">
                   <span className="text-slate-500">{entered.length} produkte</span>

@@ -52,6 +52,13 @@ model Product {
   cmimiShitjesRi Float?
   sasiaVjeter    Float?
 
+  /// Units of `sasia` that came in on a "Me TVSH" supply (Inventari). Sales
+  /// and personal use take these first. Guarded by the CHECK constraints
+  /// "Product_sasiaFaturuar_non_negative" and "Product_sasiaFaturuar_max_sasia"
+  /// (0 <= sasiaFaturuar <= sasia) from migration 8_inventari, so any write
+  /// that lowers `sasia` must lower this in the same statement. Always 0 for
+  /// untracked (kg) products. Older snapshots restore as 0.
+  sasiaFaturuar Float            @default(0)
   njesia        String           @default("cope")
   /// Shown as a tile on the POS because an admin added it there. kg products
   /// are tiles anyway; this is for everything else (bread, ...). Added in
@@ -81,6 +88,11 @@ model Supply {
   data       DateTime     @default(now())
   shenime    String?
   totali     Float        @default(0)
+  /// Came with a VAT invoice: its tracked units also went into
+  /// Product.sasiaFaturuar. Migration 8_inventari; older snapshots restore false.
+  meTvsh     Boolean      @default(false)
+  /// Invoice number, optional.
+  nrFatures  String?
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @default(now()) @updatedAt
   items      SupplyItem[]
@@ -135,6 +147,9 @@ model SaleItem {
   cmimiBlerjes    Float
   cmimiShitjes    Float
   fitimi          Float
+  /// Units of this line taken from invoiced stock (Product.sasiaFaturuar);
+  /// returned there when the sale is deleted or edited.
+  sasiaFaturuar   Float   @default(0)
   sale            Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product         Product @relation(fields: [productId], references: [id])
 
@@ -183,6 +198,8 @@ model PersonalUse {
   njesia        String
   cmimiBlerjes  Float
   totali        Float
+  /// Units of this line taken from invoiced stock, like SaleItem.sasiaFaturuar.
+  sasiaFaturuar Float            @default(0)
   createdAt     DateTime         @default(now())
 
   @@index([entryId])

@@ -141,6 +141,12 @@ export async function lockProduct(tx: Tx, productId: number) {
   await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${productId} FOR UPDATE`
 }
 
+/** The row `takeAndLock` hands back: priced columns plus the invoiced split. */
+export interface TakenProduct extends PricedProduct {
+  /** Units of this take that came out of invoiced stock (sasiaFaturuar). */
+  ngaFaturuar: number
+}
+
 /**
  * Takes `sasia` units of one product and returns its priced columns, read
  * under the row lock — the sale path's single statement per line.
@@ -152,8 +158,15 @@ export async function lockProduct(tx: Tx, productId: number) {
  * after the decrement, which is what the separate re-read used to fetch.
  * `updatedAt` is set the way Prisma's updateMany set it.
  *
+ * Invoiced stock goes first: the same statement lowers `sasiaFaturuar` by up
+ * to `sasia`. It has to be the same statement — the CHECK
+ * `sasiaFaturuar <= sasia` is checked per statement, so lowering `sasia` on
+ * its own first would fail whenever every unit left is invoiced. RETURNING
+ * can only see the new row, so the CTE reads the old counter (taking the row
+ * lock as it does) to report how many invoiced units this take used.
+ *
  * Untracked (kg): nothing to decrement, so SELECT … FOR UPDATE takes the lock
- * and reads in one go.
+ * and reads in one go. kg products never hold invoiced stock.
  *
  * Returns null when there was not enough stock (no row matched the guard).
  */
@@ -162,27 +175,52 @@ export async function takeAndLock(
   productId: number,
   sasia: number,
   tracked: boolean
-): Promise<PricedProduct | null> {
+): Promise<TakenProduct | null> {
   const rows = tracked
-    ? await tx.$queryRaw<PricedProduct[]>`
-        UPDATE "Product"
-           SET sasia = sasia - ${sasia}::double precision,
+    ? await tx.$queryRaw<TakenProduct[]>`
+        WITH old AS (
+          SELECT id, "sasiaFaturuar" AS faturuar
+            FROM "Product"
+           WHERE id = ${productId}
+             FOR UPDATE
+        )
+        UPDATE "Product" p
+           SET sasia = p.sasia - ${sasia}::double precision,
+               "sasiaFaturuar" = GREATEST(0, p."sasiaFaturuar" - ${sasia}::double precision),
                -- Stored as UTC wall time, like Prisma's own writes, whatever
                -- the session time zone is.
                "updatedAt" = (${new Date().toISOString()}::timestamptz AT TIME ZONE 'UTC')
-         WHERE id = ${productId}
-           AND sasia >= ${sasia}::double precision
-     RETURNING id, sasia, "cmimiBlerjes", "cmimiShitjes",
-               "cmimiBlerjesRi", "cmimiShitjesRi", "sasiaVjeter"
+          FROM old
+         WHERE p.id = old.id
+           AND p.sasia >= ${sasia}::double precision
+     RETURNING p.id, p.sasia, p."cmimiBlerjes", p."cmimiShitjes",
+               p."cmimiBlerjesRi", p."cmimiShitjesRi", p."sasiaVjeter",
+               LEAST(old.faturuar, ${sasia}::double precision) AS "ngaFaturuar"
       `
-    : await tx.$queryRaw<PricedProduct[]>`
+    : await tx.$queryRaw<TakenProduct[]>`
         SELECT id, sasia, "cmimiBlerjes", "cmimiShitjes",
-               "cmimiBlerjesRi", "cmimiShitjesRi", "sasiaVjeter"
+               "cmimiBlerjesRi", "cmimiShitjesRi", "sasiaVjeter",
+               0::double precision AS "ngaFaturuar"
           FROM "Product"
          WHERE id = ${productId}
            FOR UPDATE
       `
   return rows[0] ?? null
+}
+
+/**
+ * Puts units back on the shelf — a deleted or edited sale or personal-use
+ * line. `ngaFaturuar` of them go back into invoiced stock, where they came
+ * from. One statement, so the `sasiaFaturuar <= sasia` CHECK holds.
+ */
+export async function returnStock(tx: Tx, productId: number, sasia: number, ngaFaturuar: number) {
+  await tx.product.update({
+    where: { id: productId },
+    data: {
+      sasia: { increment: sasia },
+      ...(ngaFaturuar > 0 ? { sasiaFaturuar: { increment: ngaFaturuar } } : {}),
+    },
+  })
 }
 
 /**

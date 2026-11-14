@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { mergeByProductId, tracksStock, validateQuantity } from '@/lib/validation'
-import { applyConsumption, lockProduct, priceConsumption, PRICED_PRODUCT_SELECT } from '@/lib/pricing'
+import { applyConsumptionLocked, priceConsumption, takeAndLock } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export const dynamic = 'force-dynamic'
@@ -23,7 +23,7 @@ interface IncomingItem {
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(['admin', 'cashier'])
+  const { role, error } = await requireRole(['admin', 'cashier'])
   if (error) return error
 
   try {
@@ -48,12 +48,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const entries = await prisma.personalUseEntry.findMany({
+    const rows = await prisma.personalUseEntry.findMany({
       where,
       orderBy: { data: 'desc' },
       take: 500,
       include: { items: { orderBy: { id: 'asc' } } },
     })
+    // The invoiced split is Inventari data, which only admins see.
+    const entries =
+      role === 'admin'
+        ? rows
+        : rows.map((e) => ({
+            ...e,
+            items: e.items.map(({ sasiaFaturuar: _f, ...item }) => item),
+          }))
 
     // Cost per calendar month, newest first, for the summary strip.
     const byMonth = new Map<string, { muaji: string; totali: number; numri: number }>()
@@ -155,39 +163,29 @@ export async function POST(req: NextRequest) {
         njesia: string
         cmimiBlerjes: number
         totali: number
+        sasiaFaturuar: number
       }> = []
 
       for (const line of validated) {
-        if (tracksStock(line.njesia)) {
-          // Conditional decrement: the `sasia: { gte }` guard and the write are
-          // a single atomic statement, so stock can never be driven below zero.
-          // It also takes the row lock, which is what makes the re-read
-          // consistent.
-          const updated = await tx.product.updateMany({
-            where: { id: line.productId, sasia: { gte: line.sasia } },
-            data: { sasia: { decrement: line.sasia } },
-          })
-          if (updated.count !== 1) {
-            const current = byId.get(line.productId)
-            throw new ApiFailure(
-              `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
-              409,
-              'INSUFFICIENT_STOCK'
-            )
-          }
-        } else {
-          // Untracked (kg): no stock to take, only the lock for the re-read.
-          await lockProduct(tx, line.productId)
+        // The sale path's single statement: for tracked stock the conditional
+        // decrement (guard + write + row lock, so stock can never be driven
+        // below zero) that also takes invoiced (Me TVSH) units first; for kg a
+        // plain row lock. Either way it returns the row as it stands under the
+        // lock.
+        const locked = await takeAndLock(tx, line.productId, line.sasia, tracksStock(line.njesia))
+        if (!locked) {
+          const current = byId.get(line.productId)
+          throw new ApiFailure(
+            `Stoku i pamjaftueshëm për: ${line.emri}. Stoku: ${current?.sasia ?? 0}`,
+            409,
+            'INSUFFICIENT_STOCK'
+          )
         }
 
         // Personal use draws down the old-price stock exactly like a sale, so a
         // pending price change promotes on schedule whichever way stock leaves.
-        const locked = await tx.product.findUniqueOrThrow({
-          where: { id: line.productId },
-          select: PRICED_PRODUCT_SELECT,
-        })
         const pricing = priceConsumption(locked, line.sasia)
-        await applyConsumption(tx, line.productId, line.sasia)
+        await applyConsumptionLocked(tx, locked, line.sasia)
 
         const lineTotal = pricing.cmimiBlerjes * line.sasia
         totali += lineTotal
@@ -199,6 +197,7 @@ export async function POST(req: NextRequest) {
           njesia: line.njesia,
           cmimiBlerjes: pricing.cmimiBlerjes,
           totali: lineTotal,
+          sasiaFaturuar: locked.ngaFaturuar,
         })
       }
 

@@ -6,7 +6,8 @@ import { Role } from './roles'
  * response — so they are stripped from the payload here, server-side.
  *
  * Fields removed for non-admins:
- *   Sale.fitimi, SaleItem.fitimi, SaleItem.cmimiBlerjes
+ *   Sale.fitimi, SaleItem.fitimi, SaleItem.cmimiBlerjes,
+ *   SaleItem.sasiaFaturuar (invoiced split — Inventari is admin-only)
  */
 
 interface SaleItemLike {
@@ -38,7 +39,12 @@ export function stripProfitFromSale<T extends SaleLike>(
     ...(items
       ? {
           items: items.map((item) => {
-            const { fitimi: _itemFitimi, cmimiBlerjes: _cost, ...itemRest } = item
+            const {
+              fitimi: _itemFitimi,
+              cmimiBlerjes: _cost,
+              sasiaFaturuar: _invoiced,
+              ...itemRest
+            } = item
             return itemRest
           }),
         }

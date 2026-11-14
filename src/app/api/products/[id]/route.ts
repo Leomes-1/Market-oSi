@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
-import { validatePrice, validateQuantity } from '@/lib/validation'
+import { tracksStock, validatePrice, validateQuantity } from '@/lib/validation'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
@@ -108,23 +108,37 @@ export async function PUT(
       return badRequest('Barkodet e përsëritura nuk lejohen')
     }
 
-    const product = await prisma.product.update({
-      where: { id },
-      data: {
-        emri,
-        kategoria,
-        sasia: stock,
-        stokuMinimal: minimal,
-        cmimiBlerjes: nextBlerjes,
-        cmimiShitjes: nextShitjes,
-        njesia: unit,
-        furnitorId: furnitorId ? Number(furnitorId) : null,
-        barcodes: {
-          deleteMany: {},
-          create: validBarcodes.map((barcode) => ({ barcode })),
+    const product = await prisma.$transaction(async (tx) => {
+      // Invoiced stock can't exceed the stock: a hand correction below it
+      // lowers it to match, and a product switched to kg (no stock tracking)
+      // holds none. Lowered first, in its own statement, so the CHECK
+      // sasiaFaturuar <= sasia holds after each one; it also takes the row
+      // lock, so no sale slips in between.
+      const faturuarMax = tracksStock(unit) ? stock : 0
+      await tx.$executeRaw`
+        UPDATE "Product"
+           SET "sasiaFaturuar" = LEAST("sasiaFaturuar", ${faturuarMax}::double precision)
+         WHERE id = ${id}
+      `
+
+      return tx.product.update({
+        where: { id },
+        data: {
+          emri,
+          kategoria,
+          sasia: stock,
+          stokuMinimal: minimal,
+          cmimiBlerjes: nextBlerjes,
+          cmimiShitjes: nextShitjes,
+          njesia: unit,
+          furnitorId: furnitorId ? Number(furnitorId) : null,
+          barcodes: {
+            deleteMany: {},
+            create: validBarcodes.map((barcode) => ({ barcode })),
+          },
         },
-      },
-      include: { furnitor: true, barcodes: true },
+        include: { furnitor: true, barcodes: true },
+      })
     })
 
     scheduleSnapshot()

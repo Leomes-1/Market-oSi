@@ -158,6 +158,18 @@ export function handleApiError(
       console.error(`${context}: blocked a write that would make stock negative`, error)
       return conflict('Stoku nuk mjafton', 'INSUFFICIENT_STOCK')
     }
+    // 8_inventari: 0 <= sasiaFaturuar <= sasia. The API keeps both in step,
+    // so reaching this means a code path forgot to.
+    if (
+      constraint === 'Product_sasiaFaturuar_non_negative' ||
+      constraint === 'Product_sasiaFaturuar_max_sasia'
+    ) {
+      console.error(`${context}: blocked a write that breaks invoiced stock (${constraint})`, error)
+      return conflict(
+        'Stoku me faturë nuk mund të jetë negativ ose më i madh se stoku',
+        'INSUFFICIENT_STOCK'
+      )
+    }
     console.error(`${context}: check constraint ${constraint || '(unnamed)'} violated`, error)
     return conflict('Të dhënat nuk i plotësojnë kushtet e bazës së të dhënave', 'CHECK_VIOLATION')
   }

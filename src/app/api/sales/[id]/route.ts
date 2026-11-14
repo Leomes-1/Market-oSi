@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
 import { mergeByProductId, tracksStock, validateQuantity } from '@/lib/validation'
+import { returnStock, takeAndLock } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function PUT(
@@ -60,13 +61,11 @@ export async function PUT(
 
       // Put the original quantities back before re-applying the new ones, so
       // availability is measured against stock as it was before this invoice.
-      // Untracked (kg) products have no stock to put back.
+      // Untracked (kg) products have no stock to put back. Units that came
+      // from invoiced stock go back there.
       for (const original of existingSale.items) {
         if (!tracksStock(original.product.njesia)) continue
-        await tx.product.update({
-          where: { id: original.productId },
-          data: { sasia: { increment: original.sasia } },
-        })
+        await returnStock(tx, original.productId, original.sasia, original.sasiaFaturuar)
       }
 
       const products = await tx.product.findMany({
@@ -83,6 +82,7 @@ export async function PUT(
         cmimiBlerjes: number
         cmimiShitjes: number
         fitimi: number
+        sasiaFaturuar: number
       }> = []
       const untracked = new Set<number>()
 
@@ -116,19 +116,20 @@ export async function PUT(
           cmimiBlerjes,
           cmimiShitjes,
           fitimi: lineFitimi,
+          sasiaFaturuar: 0,
         })
       }
 
       await tx.saleItem.deleteMany({ where: { saleId } })
 
-      // Same atomic guard as the create path: stock cannot go below zero.
+      // Same atomic guard as the create path: stock cannot go below zero, and
+      // invoiced units are taken first. Prices stay the historical ones above;
+      // an edit does not move the pending-price counter, as before.
       for (const item of itemData) {
         if (untracked.has(item.productId)) continue
-        const updated = await tx.product.updateMany({
-          where: { id: item.productId, sasia: { gte: item.sasia } },
-          data: { sasia: { decrement: item.sasia } },
-        })
-        if (updated.count !== 1) {
+        const taken = await takeAndLock(tx, item.productId, item.sasia, true)
+        if (taken) item.sasiaFaturuar = taken.ngaFaturuar
+        else {
           const current = await tx.product.findUnique({ where: { id: item.productId } })
           throw new ApiFailure(
             `Stoku i pamjaftueshëm për: ${item.emriProduktit}. Disponibël: ${current?.sasia ?? 0}`,
@@ -180,10 +181,7 @@ export async function DELETE(
     await prisma.$transaction(async (tx) => {
       for (const item of sale.items) {
         if (!tracksStock(item.product.njesia)) continue
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { sasia: { increment: item.sasia } },
-        })
+        await returnStock(tx, item.productId, item.sasia, item.sasiaFaturuar)
       }
       await tx.sale.delete({ where: { id: saleId } })
     })

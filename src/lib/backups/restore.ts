@@ -123,6 +123,13 @@ const ADDED_COLUMNS: Array<{
   { table: 'Product', column: 'neArke', type: 'bool', value: (row) => row.njesia === 'kg' },
   // 7_product_pos_group — no group chosen by hand yet: automatic.
   { table: 'Product', column: 'grupiArke', type: 'text', value: () => null },
+  // 8_inventari — before it nothing was invoiced: no invoiced stock, no
+  // "Me TVSH" supplies or invoice numbers, no lines taken from invoiced stock.
+  { table: 'Product', column: 'sasiaFaturuar', type: 'float8', value: () => 0 },
+  { table: 'Supply', column: 'meTvsh', type: 'bool', value: () => false },
+  { table: 'Supply', column: 'nrFatures', type: 'text', value: () => null },
+  { table: 'SaleItem', column: 'sasiaFaturuar', type: 'float8', value: () => 0 },
+  { table: 'PersonalUse', column: 'sasiaFaturuar', type: 'float8', value: () => 0 },
 ]
 
 /**

@@ -21,6 +21,7 @@ import {
   RiShieldUserLine,
   RiHomeHeartLine,
   RiDatabase2Line,
+  RiArchiveLine,
 } from 'react-icons/ri'
 
 const navItems = [
@@ -33,6 +34,7 @@ const navItems = [
   { href: '/furnizime', label: 'Furnizime', icon: RiBox3Line, allowed: ['admin', 'staff'] as Role[] },
   { href: '/furnitoret', label: 'Furnitorët', icon: RiTruckLine, allowed: ['admin', 'staff'] as Role[] },
   { href: '/perdorim-vetjak', label: 'Përdorim Vetjak', icon: RiHomeHeartLine, allowed: ['admin', 'cashier'] as Role[] },
+  { href: '/inventari', label: 'Inventari', icon: RiArchiveLine, allowed: ['admin'] as Role[] },
   { href: '/perdoruesit', label: 'Përdoruesit', icon: RiTeamLine, allowed: ['admin'] as Role[] },
   { href: '/backup', label: 'Backup & Rikthim', icon: RiDatabase2Line, allowed: ['admin'] as Role[] },
 ]
