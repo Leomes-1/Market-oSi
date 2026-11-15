@@ -11,7 +11,9 @@ export const LIST_SELECT = {
   sasia: true,
   cmimiBlerjes: true,
   blere: true,
-  product: { select: { emri: true, njesia: true, sasia: true } },
+  product: {
+    select: { emri: true, njesia: true, sasia: true, furnitorId: true, furnitor: { select: { emri: true } } },
+  },
 } satisfies Prisma.ShoppingListItemSelect
 
 type ListRow = Prisma.ShoppingListItemGetPayload<{ select: typeof LIST_SELECT }>
@@ -31,5 +33,7 @@ export function toListLine(row: ListRow): ShoppingListLine {
     cmimiBlerjes: row.cmimiBlerjes,
     blere: row.blere,
     stoku: row.product && tracksStock(njesia) ? row.product.sasia : null,
+    furnitorId: row.product?.furnitorId ?? null,
+    furnitorEmri: row.product?.furnitor?.emri ?? null,
   }
 }

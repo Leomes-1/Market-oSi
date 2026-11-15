@@ -6,18 +6,31 @@ import toast from 'react-hot-toast'
 import BarcodeField, { type BarcodeFieldHandle } from '@/components/pos/BarcodeField'
 import Modal from '@/components/ui/Modal'
 import ErrorState from '@/components/ui/ErrorState'
-import { lookupBarcode, useCatalog, type CatalogProduct } from '@/lib/catalog'
+import { lookupBarcode, refreshCatalog, useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { findProducts, searchIndex } from '@/lib/product-search'
-import { listTotals, type ShoppingListLine } from '@/lib/shopping-list'
+import {
+  groupBySupplier,
+  listTotals,
+  planSupplies,
+  type ListGroup,
+  type PlannedSupply,
+  type ShoppingListLine,
+} from '@/lib/shopping-list'
 import { formatCurrency } from '@/lib/utils'
 import { isWeightedUnit } from '@/lib/validation'
+import { rowDelayStyle } from '@/lib/animation'
 import {
   RiAddLine,
+  RiCheckLine,
+  RiCloseCircleLine,
   RiDeleteBin6Line,
   RiEditLine,
+  RiLayoutGridLine,
+  RiListUnordered,
   RiLoader4Line,
   RiRefreshLine,
   RiShoppingCart2Line,
+  RiTimeLine,
   RiTruckLine,
 } from 'react-icons/ri'
 
@@ -25,6 +38,54 @@ import {
 const SAVE_PAUSE_MS = 500
 
 type Editable = Partial<Pick<ShoppingListLine, 'sasia' | 'cmimiBlerjes'>>
+
+/** Plain list, or "Ndaj sipas furnitorit". Remembered per browser. */
+type View = 'list' | 'grouped'
+const VIEW_KEY = 'market-os:lista-blerjeve:view'
+/** How long the lines take to slide out before the other view comes in. */
+const SWAP_MS = 200
+
+function readView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'grouped' ? 'grouped' : 'list'
+  } catch {
+    return 'list'
+  }
+}
+
+function saveView(view: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, view)
+  } catch {
+    // Private window or storage blocked: the view just isn't remembered.
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return false
+  }
+}
+
+function getTodayString() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** "Krijo furnizimin" / "Krijo të gjitha furnizimet": the confirm-and-report dialog. */
+type SupplyStatus = 'waiting' | 'saving' | 'ok' | 'error'
+interface Batch {
+  supplies: PlannedSupply[]
+  skippedFree: string[]
+  skippedZero: number
+  status: Record<string, SupplyStatus>
+  errors: Record<string, string>
+  phase: 'confirm' | 'running' | 'done'
+  /** Opened from one supplier's card rather than "Krijo të gjitha". */
+  single: boolean
+}
 
 /**
  * "Lista e blerjeve" tab: one shared shopping list kept in the database, so it
@@ -50,6 +111,15 @@ export default function ShoppingListTab() {
   const [freeOpen, setFreeOpen] = useState(false)
   const [free, setFree] = useState({ emri: '', sasia: '1', cmimi: '' })
   const [addingFree, setAddingFree] = useState(false)
+  const [view, setView] = useState<View>('list')
+  // The lines are sliding out before the view switches.
+  const [leaving, setLeaving] = useState(false)
+  // Set once the view has been switched here, so only a switch animates in —
+  // not the first load.
+  const [swapped, setSwapped] = useState(false)
+  const swapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [batch, setBatch] = useState<Batch | null>(null)
+  const [removingBought, setRemovingBought] = useState(false)
 
   const barcodeRef = useRef<BarcodeFieldHandle>(null)
   const qtyRefs = useRef<Map<number, HTMLInputElement>>(new Map())
@@ -123,8 +193,34 @@ export default function ShoppingListTab() {
       })
       map.clear()
       if (highlightTimer.current) clearTimeout(highlightTimer.current)
+      if (swapTimer.current) clearTimeout(swapTimer.current)
     }
   }, [])
+
+  // The remembered view, read once mounted (localStorage isn't there on the server).
+  useEffect(() => {
+    setView(readView())
+  }, [])
+
+  /**
+   * Plain list ⇄ grouped. The lines slide right and fade, then the other view
+   * comes in (cards one after another). With reduced motion it just switches.
+   */
+  function toggleView() {
+    if (leaving) return
+    const next: View = view === 'list' ? 'grouped' : 'list'
+    saveView(next)
+    setSwapped(true)
+    if (prefersReducedMotion()) {
+      setView(next)
+      return
+    }
+    setLeaving(true)
+    swapTimer.current = setTimeout(() => {
+      setView(next)
+      setLeaving(false)
+    }, SWAP_MS)
+  }
 
   const replaceLine = useCallback((line: ShoppingListLine) => {
     setLines((prev) => {
@@ -366,10 +462,128 @@ export default function ShoppingListTab() {
     router.push('/furnizime/i-ri?lista=1')
   }
 
+  // ── Supplies per supplier ────────────────────────────────────────────────
+
+  const groups = useMemo(() => groupBySupplier(lines), [lines])
+
+  /** Opens the confirm dialog for these groups' ✓ lines (one card, or all). */
+  function openBatch(target: ListGroup[], single: boolean) {
+    const plan = planSupplies(target)
+    if (plan.supplies.length === 0) {
+      toast.error(
+        single
+          ? 'Shëno me ✓ produktet e këtij furnitori që ke blerë'
+          : 'Shëno me ✓ produktet që ke blerë, pastaj krijo furnizimet'
+      )
+      return
+    }
+    setBatch({
+      ...plan,
+      status: Object.fromEntries(plan.supplies.map((s) => [s.key, 'waiting' as SupplyStatus])),
+      errors: {},
+      phase: 'confirm',
+      single,
+    })
+  }
+
+  /**
+   * One POST /api/supplies per supplier — the same route as Shto Furnizim, so
+   * stock, pending prices and the backup snapshot all happen as usual. They
+   * run one after another and each stands alone: a failure is recorded and
+   * the next one still goes. Not "Me TVSH"; that can be set later on the
+   * supply's details. The product's own cost isn't changed (updatePrice off).
+   */
+  async function runBatch() {
+    if (!batch || batch.phase !== 'confirm') return
+    const plan = batch.supplies
+    setBatch((b) => b && { ...b, phase: 'running' })
+    // Edits still waiting are saved first, so the list matches what is sent.
+    await flushAll()
+    const data = getTodayString()
+    let saved = 0
+
+    for (const s of plan) {
+      setBatch((b) => b && { ...b, status: { ...b.status, [s.key]: 'saving' } })
+      let error: string | null = null
+      try {
+        const res = await fetch('/api/supplies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            furnitorId: s.furnitorId,
+            data,
+            shenime: `Nga lista e blerjeve — ${s.title}`,
+            items: s.lines.map((l) => ({
+              productId: l.productId,
+              sasia: l.sasia,
+              cmimiBlerjes: l.cmimiBlerjes,
+              cmimiShitjes: null,
+              updatePrice: false,
+            })),
+          }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          error = body.error || `Gabim (${res.status})`
+        }
+      } catch {
+        // The request may or may not have reached the server.
+        error = 'Gabim rrjeti — kontrollo te Furnizimet nëse u ruajt'
+      }
+      if (!error) saved++
+      setBatch(
+        (b) =>
+          b && {
+            ...b,
+            status: { ...b.status, [s.key]: error ? 'error' : 'ok' },
+            errors: error ? { ...b.errors, [s.key]: error } : b.errors,
+          }
+      )
+    }
+
+    setBatch((b) => b && { ...b, phase: 'done' })
+    if (saved > 0) {
+      // Stock changed: the catalogue and the list's "stoku" are stale.
+      void refreshCatalog()
+      void fetchList(true)
+    }
+  }
+
+  /** Lines that went into a saved supply. */
+  const savedLines = batch
+    ? batch.supplies.filter((s) => batch.status[s.key] === 'ok').flatMap((s) => s.lines)
+    : []
+
+  async function finishBatch(removeSaved: boolean) {
+    if (removeSaved && savedLines.length > 0) {
+      setRemovingBought(true)
+      try {
+        // The server removes only lines that are still ticked.
+        const res = await fetch(`/api/shopping-list?bought=${savedLines.map((l) => l.id).join(',')}`, {
+          method: 'DELETE',
+        })
+        if (!res.ok) throw new Error()
+        const body = await res.json().catch(() => ({}))
+        const n = typeof body.removed === 'number' ? body.removed : savedLines.length
+        toast.success(n === 1 ? '1 rresht u hoq nga lista' : `${n} rreshta u hoqën nga lista`)
+      } catch {
+        toast.error('Rreshtat nuk u hoqën nga lista')
+      } finally {
+        setRemovingBought(false)
+      }
+      await fetchList(true)
+    }
+    setBatch(null)
+  }
+
   // ── Keyboard ─────────────────────────────────────────────────────────────
 
+  // Enter moves down the lines in the order they are on screen.
+  const ordered = view === 'grouped' ? groups.flatMap((g) => g.lines) : lines
+  const orderIndex = new Map(ordered.map((l, i) => [l.id, i]))
+
   function focusQty(i: number) {
-    const target = lines[i]
+    const target = ordered[i]
     if (!target) {
       barcodeRef.current?.focus()
       return
@@ -392,6 +606,155 @@ export default function ShoppingListTab() {
   }
 
   const totals = listTotals(lines)
+
+  /** One line, the same in both views: ✓, name, quantity × price = total, remove. */
+  function renderRow(line: ShoppingListLine) {
+    const i = orderIndex.get(line.id) ?? 0
+    const total = line.sasia * line.cmimiBlerjes
+    return (
+      <div
+        key={line.id}
+        ref={(el) => {
+          if (el) rowRefs.current.set(line.id, el)
+          else rowRefs.current.delete(line.id)
+        }}
+        className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3 transition-colors ${
+          highlight === line.id ? 'bg-blue-50' : line.blere ? 'bg-green-50/50' : ''
+        }`}
+      >
+        <label className="flex items-center justify-center w-8 h-8 -m-1 cursor-pointer flex-shrink-0">
+          <input
+            type="checkbox"
+            checked={line.blere}
+            onChange={() => void toggleBought(line)}
+            className="w-5 h-5 accent-green-600 cursor-pointer"
+            aria-label={`Blerë: ${line.emri}`}
+            title="Blerë"
+          />
+        </label>
+
+        <div className="flex-1 min-w-0 basis-[calc(100%-5.5rem)] sm:basis-0">
+          <p
+            className={`text-sm font-medium truncate ${
+              line.blere ? 'line-through text-slate-400' : 'text-slate-800'
+            }`}
+          >
+            {line.emri}
+          </p>
+          <p className="text-xs text-slate-400">
+            {line.productId === null ? (
+              <span className="text-amber-600">jo në katalog</span>
+            ) : (
+              <>
+                {line.njesia}
+                {line.stoku !== null && ` · stoku ${line.stoku}`}
+              </>
+            )}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void removeLine(line)}
+          title="Hiq nga lista"
+          aria-label={`Hiq ${line.emri}`}
+          className="order-2 sm:order-last p-2 -m-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+        >
+          <RiDeleteBin6Line />
+        </button>
+
+        <div className="order-3 sm:order-2 w-full sm:w-auto flex items-center gap-2 pl-10 sm:pl-0">
+          <input
+            ref={(el) => {
+              if (el) qtyRefs.current.set(line.id, el)
+              else qtyRefs.current.delete(line.id)
+            }}
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step={line.productId === null || isWeightedUnit(line.njesia) ? 'any' : '1'}
+            value={line.sasia === 0 ? '' : line.sasia}
+            placeholder="0"
+            onChange={(e) => edit(line.id, { sasia: Math.max(0, Number(e.target.value) || 0) })}
+            onKeyDown={(e) => onQtyKeyDown(e, i)}
+            onFocus={(e) => e.target.select()}
+            enterKeyHint="next"
+            className="input py-1.5 text-sm text-center w-20 tabular-nums"
+            aria-label={`Sasia: ${line.emri}`}
+          />
+          <span className="text-slate-300 text-sm">×</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="any"
+            value={line.cmimiBlerjes}
+            onChange={(e) => edit(line.id, { cmimiBlerjes: Math.max(0, Number(e.target.value) || 0) })}
+            onFocus={(e) => e.target.select()}
+            className="input py-1.5 text-sm text-right w-24 tabular-nums"
+            aria-label={`Çmimi i blerjes: ${line.emri}`}
+            title="Çmimi i blerjes — vetëm për këtë listë, produkti nuk ndryshon"
+          />
+          <span className="ml-auto sm:ml-0 sm:w-24 text-right text-sm font-semibold text-slate-800 tabular-nums">
+            {total > 0 ? formatCurrency(total) : <span className="text-slate-300">—</span>}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  /** One supplier's card in the grouped view. */
+  function renderGroup(g: ListGroup, index: number) {
+    const t = listTotals(g.lines)
+    const ticked = g.lines.filter((l) => l.blere && l.sasia > 0).length
+    return (
+      <section
+        key={g.key}
+        className="card overflow-hidden anim-view-in"
+        style={rowDelayStyle(index, 0.05)}
+        aria-label={g.title}
+      >
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5 bg-slate-50 border-b border-slate-100">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {g.kind === 'free' ? (
+              <RiEditLine className="text-slate-400 flex-shrink-0" />
+            ) : (
+              <RiTruckLine className={`flex-shrink-0 ${g.kind === 'none' ? 'text-slate-300' : 'text-slate-400'}`} />
+            )}
+            <h3 className="font-semibold text-slate-800 truncate">{g.title}</h3>
+            <span className="text-xs text-slate-400 whitespace-nowrap">{g.lines.length} rreshta</span>
+          </div>
+          {g.kind !== 'free' && (
+            <button
+              type="button"
+              onClick={() => openBatch([g], true)}
+              disabled={batch !== null}
+              className="btn-primary text-sm py-1.5 px-3 flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <RiTruckLine />
+              Krijo furnizimin ({ticked})
+            </button>
+          )}
+          <div className="w-full flex flex-wrap gap-x-4 gap-y-0.5 text-xs tabular-nums">
+            <span className="text-slate-600">
+              Gjithsej <b className="text-slate-900">{formatCurrency(t.total)}</b>
+            </span>
+            <span className="text-green-700">
+              Blerë <b>{formatCurrency(t.blere)}</b>
+            </span>
+            <span className="text-amber-700">
+              Mbetur <b>{formatCurrency(t.mbetur)}</b>
+            </span>
+            {g.kind === 'free' && <span className="text-slate-400">nuk shkojnë në furnizim</span>}
+          </div>
+        </header>
+        <div className="divide-y divide-slate-100">{g.lines.map((l) => renderRow(l))}</div>
+      </section>
+    )
+  }
+
+  const batchDone = batch?.phase === 'done'
+  const batchFailed = batch ? batch.supplies.filter((s) => batch.status[s.key] === 'error') : []
 
   return (
     <div className="max-w-4xl">
@@ -530,102 +893,25 @@ export default function ShoppingListTab() {
           <p className="text-slate-400 text-sm">Lista është bosh — skano ose kërko një produkt</p>
         </div>
       ) : (
-        <div className="card divide-y divide-slate-100 overflow-hidden">
-          {lines.map((line, i) => {
-            const total = line.sasia * line.cmimiBlerjes
-            return (
-              <div
-                key={line.id}
-                ref={(el) => {
-                  if (el) rowRefs.current.set(line.id, el)
-                  else rowRefs.current.delete(line.id)
-                }}
-                className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3 transition-colors ${
-                  highlight === line.id ? 'bg-blue-50' : line.blere ? 'bg-green-50/50' : ''
-                }`}
-              >
-                <label className="flex items-center justify-center w-8 h-8 -m-1 cursor-pointer flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={line.blere}
-                    onChange={() => void toggleBought(line)}
-                    className="w-5 h-5 accent-green-600 cursor-pointer"
-                    aria-label={`Blerë: ${line.emri}`}
-                    title="Blerë"
-                  />
-                </label>
-
-                <div className="flex-1 min-w-0 basis-[calc(100%-5.5rem)] sm:basis-0">
-                  <p
-                    className={`text-sm font-medium truncate ${
-                      line.blere ? 'line-through text-slate-400' : 'text-slate-800'
-                    }`}
-                  >
-                    {line.emri}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    {line.productId === null ? (
-                      <span className="text-amber-600">jo në katalog</span>
-                    ) : (
-                      <>
-                        {line.njesia}
-                        {line.stoku !== null && ` · stoku ${line.stoku}`}
-                      </>
-                    )}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => void removeLine(line)}
-                  title="Hiq nga lista"
-                  aria-label={`Hiq ${line.emri}`}
-                  className="order-2 sm:order-last p-2 -m-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                >
-                  <RiDeleteBin6Line />
-                </button>
-
-                <div className="order-3 sm:order-2 w-full sm:w-auto flex items-center gap-2 pl-10 sm:pl-0">
-                  <input
-                    ref={(el) => {
-                      if (el) qtyRefs.current.set(line.id, el)
-                      else qtyRefs.current.delete(line.id)
-                    }}
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    step={line.productId === null || isWeightedUnit(line.njesia) ? 'any' : '1'}
-                    value={line.sasia === 0 ? '' : line.sasia}
-                    placeholder="0"
-                    onChange={(e) => edit(line.id, { sasia: Math.max(0, Number(e.target.value) || 0) })}
-                    onKeyDown={(e) => onQtyKeyDown(e, i)}
-                    onFocus={(e) => e.target.select()}
-                    enterKeyHint="next"
-                    className="input py-1.5 text-sm text-center w-20 tabular-nums"
-                    aria-label={`Sasia: ${line.emri}`}
-                  />
-                  <span className="text-slate-300 text-sm">×</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    step="any"
-                    value={line.cmimiBlerjes}
-                    onChange={(e) =>
-                      edit(line.id, { cmimiBlerjes: Math.max(0, Number(e.target.value) || 0) })
-                    }
-                    onFocus={(e) => e.target.select()}
-                    className="input py-1.5 text-sm text-right w-24 tabular-nums"
-                    aria-label={`Çmimi i blerjes: ${line.emri}`}
-                    title="Çmimi i blerjes — vetëm për këtë listë, produkti nuk ndryshon"
-                  />
-                  <span className="ml-auto sm:ml-0 sm:w-24 text-right text-sm font-semibold text-slate-800 tabular-nums">
-                    {total > 0 ? formatCurrency(total) : <span className="text-slate-300">—</span>}
-                  </span>
-                </div>
-              </div>
-            )
-          })}
+        // Slides right and fades before the view switches; the other view then
+        // comes in (anim-view-in, off under reduced motion).
+        <div
+          className={`transition-[transform,opacity] duration-200 ease-in motion-reduce:transition-none ${
+            leaving ? 'translate-x-10 opacity-0' : ''
+          }`}
+        >
+          {view === 'grouped' ? (
+            <div key="grouped" className="space-y-4">
+              {groups.map((g, gi) => renderGroup(g, gi))}
+            </div>
+          ) : (
+            <div
+              key="list"
+              className={`card divide-y divide-slate-100 overflow-hidden ${swapped ? 'anim-view-in' : ''}`}
+            >
+              {lines.map((l) => renderRow(l))}
+            </div>
+          )}
         </div>
       )}
 
@@ -649,15 +935,39 @@ export default function ShoppingListTab() {
             Pastro listën
           </button>
           <div className="sm:ml-auto flex flex-col sm:items-end gap-1">
-            <button
-              type="button"
-              onClick={() => void openSupply()}
-              disabled={opening}
-              className="btn-primary flex items-center justify-center gap-2"
-            >
-              {opening ? <RiLoader4Line className="animate-spin" /> : <RiTruckLine />}
-              Krijo furnizimin ({boughtLines.length})
-            </button>
+            <div className="flex flex-col-reverse sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={toggleView}
+                disabled={leaving}
+                aria-pressed={view === 'grouped'}
+                className="btn-secondary flex items-center justify-center gap-2"
+              >
+                {view === 'grouped' ? <RiListUnordered /> : <RiLayoutGridLine />}
+                {view === 'grouped' ? 'Shfaq listën' : 'Ndaj sipas furnitorit'}
+              </button>
+              {view === 'grouped' ? (
+                <button
+                  type="button"
+                  onClick={() => openBatch(groups, false)}
+                  disabled={batch !== null}
+                  className="btn-primary flex items-center justify-center gap-2"
+                >
+                  <RiTruckLine />
+                  Krijo të gjitha furnizimet ({boughtLines.length})
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void openSupply()}
+                  disabled={opening}
+                  className="btn-primary flex items-center justify-center gap-2"
+                >
+                  {opening ? <RiLoader4Line className="animate-spin" /> : <RiTruckLine />}
+                  Krijo furnizimin ({boughtLines.length})
+                </button>
+              )}
+            </div>
             <p className="text-xs text-slate-500">
               {boughtLines.length === 0
                 ? 'Merr vetëm produktet e shënuara me ✓'
@@ -689,6 +999,167 @@ export default function ShoppingListTab() {
             Po, pastro
           </button>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={batch !== null}
+        onClose={() => {
+          // Never while supplies are being saved; once done, closing keeps the lines.
+          if (!batch || batch.phase === 'running' || removingBought) return
+          void finishBatch(false)
+        }}
+        title={
+          batchDone
+            ? 'Furnizimet'
+            : batch?.single
+            ? `Krijo furnizimin — ${batch.supplies[0]?.title ?? ''}`
+            : 'Krijo të gjitha furnizimet'
+        }
+        size="md"
+      >
+        {batch && (
+          <div>
+            {batch.phase === 'confirm' && (
+              <p className="text-sm text-slate-600 mb-3">
+                {batch.supplies.length === 1
+                  ? 'Do të krijohet 1 furnizim nga rreshtat e shënuar me ✓:'
+                  : `Do të krijohen ${batch.supplies.length} furnizime, një për çdo furnitor, nga rreshtat e shënuar me ✓:`}
+              </p>
+            )}
+
+            <ul className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden mb-3">
+              {batch.supplies.map((s) => {
+                const st = batch.status[s.key]
+                return (
+                  <li key={s.key} className="flex items-start gap-3 px-3 py-2.5">
+                    <span className="mt-0.5 flex-shrink-0" aria-hidden>
+                      {st === 'ok' ? (
+                        <RiCheckLine className="text-green-600" />
+                      ) : st === 'error' ? (
+                        <RiCloseCircleLine className="text-red-500" />
+                      ) : st === 'saving' ? (
+                        <RiLoader4Line className="animate-spin text-blue-500" />
+                      ) : batch.phase === 'confirm' ? (
+                        <RiTruckLine className="text-slate-400" />
+                      ) : (
+                        <RiTimeLine className="text-slate-300" />
+                      )}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium text-slate-800 truncate">{s.title}</span>
+                      <span className="block text-xs text-slate-500">
+                        {s.lines.length} {s.lines.length === 1 ? 'rresht' : 'rreshta'}
+                        {st === 'ok' && ' · u ruajt'}
+                        {st === 'saving' && ' · duke ruajtur...'}
+                      </span>
+                      {st === 'error' && (
+                        <span className="block text-xs text-red-600 mt-0.5">
+                          Nuk u ruajt: {batch.errors[s.key]}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-900 tabular-nums whitespace-nowrap">
+                      {formatCurrency(s.total)}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+
+            {batch.phase === 'confirm' && (
+              <p className="text-xs text-slate-500 mb-1">
+                Gjithsej {formatCurrency(batch.supplies.reduce((sum, s) => sum + s.total, 0))} · data e sotme · pa
+                TVSH (mund ta shënosh më vonë te detajet e furnizimit) · çmimi i produktit nuk ndryshon.
+              </p>
+            )}
+            {batch.skippedFree.length > 0 && (
+              <p className="text-xs text-amber-700 mb-1">
+                Nuk janë në katalog, prandaj nuk shkojnë në furnizim: {batch.skippedFree.join(', ')}
+              </p>
+            )}
+            {batch.skippedZero > 0 && (
+              <p className="text-xs text-slate-500 mb-1">
+                {batch.skippedZero} {batch.skippedZero === 1 ? 'rresht me ✓ ka' : 'rreshta me ✓ kanë'} sasi 0 dhe
+                {batch.skippedZero === 1 ? ' lihet' : ' lihen'} jashtë.
+              </p>
+            )}
+
+            {batchDone && (
+              <div className="mt-3 text-sm">
+                {batchFailed.length > 0 && (
+                  <p className="text-red-600 mb-2">
+                    {batchFailed.length === 1 ? 'Dështoi: ' : 'Dështuan: '}
+                    {batchFailed.map((s) => s.title).join(', ')}. Rreshtat e tyre mbeten në listë; të tjerat nuk u
+                    prekën.
+                  </p>
+                )}
+                {savedLines.length > 0 ? (
+                  <>
+                    <p className="text-slate-700">
+                      Të hiqen nga lista {savedLines.length === 1 ? '1 rresht' : `${savedLines.length} rreshtat`} me ✓
+                      që hynë në furnizime?
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Nëse i mban, herën tjetër do të përfshihen sërish në furnizim.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-slate-700">Asnjë furnizim nuk u ruajt.</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-5">
+              {batch.phase === 'confirm' && (
+                <>
+                  <button type="button" onClick={() => setBatch(null)} className="btn-secondary">
+                    Anulo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runBatch()}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <RiCheckLine />
+                    {batch.supplies.length === 1 ? 'Krijo furnizimin' : `Krijo ${batch.supplies.length} furnizime`}
+                  </button>
+                </>
+              )}
+              {batch.phase === 'running' && (
+                <span className="text-sm text-slate-500 flex items-center gap-2">
+                  <RiLoader4Line className="animate-spin" />
+                  Duke ruajtur — mos e mbyll faqen
+                </span>
+              )}
+              {batchDone &&
+                (savedLines.length > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void finishBatch(false)}
+                      disabled={removingBought}
+                      className="btn-secondary"
+                    >
+                      Jo, mbaji
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void finishBatch(true)}
+                      disabled={removingBought}
+                      className="btn-danger flex items-center gap-2"
+                    >
+                      {removingBought && <RiLoader4Line className="animate-spin" />}
+                      Po, hiqi
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => void finishBatch(false)} className="btn-secondary">
+                    Mbyll
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )
