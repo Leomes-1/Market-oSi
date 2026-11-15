@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from '@/lib/auth-helpers'
 import { badRequest, handleApiError, notFound, parseId, success } from '@/lib/api'
 import { tracksStock, validatePrice, validateQuantity } from '@/lib/validation'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
+import { productForRole } from '@/lib/sale-visibility'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
 
@@ -24,12 +25,8 @@ export async function GET(
     })
     if (!product) return notFound('Produkti nuk u gjet')
 
-    if (role === 'cashier') {
-      const { cmimiBlerjes: _cost, ...rest } = product
-      return NextResponse.json(rest)
-    }
-
-    return NextResponse.json(product)
+    // Cashiers: no current or pending cost. Staff: no invoiced stock.
+    return NextResponse.json(productForRole(product, role))
   } catch (error) {
     return handleApiError(error, 'Product GET')
   }
@@ -142,7 +139,7 @@ export async function PUT(
     })
 
     scheduleSnapshot()
-    return NextResponse.json(product)
+    return NextResponse.json(productForRole(product, role))
   } catch (error) {
     return handleApiError(error, 'Product PUT', BARCODE_DUPLICATE)
   }

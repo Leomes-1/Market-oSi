@@ -5,12 +5,13 @@ import { ApiFailure, badRequest, handleApiError, notFound, parseId, success } fr
 import { mergeByProductId, tracksStock, validateQuantity } from '@/lib/validation'
 import { returnStock, takeAndLock } from '@/lib/pricing'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
+import { stripProfitFromSale } from '@/lib/sale-visibility'
 
 export async function PUT(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { error } = await requireRole(['admin'])
+  const { role, error } = await requireRole(['admin'])
   if (error) return error
 
   try {
@@ -155,7 +156,9 @@ export async function PUT(
     })
 
     scheduleSnapshot()
-    return NextResponse.json(updatedSale)
+    // Admin-only today, so this passes the sale through; it is here so the
+    // response can't leak cost if the route is ever opened to another role.
+    return NextResponse.json(updatedSale ? stripProfitFromSale(updatedSale, role) : updatedSale)
   } catch (error) {
     return handleApiError(error, 'Sale PUT')
   }

@@ -5,6 +5,7 @@ import { badRequest, handleApiError } from '@/lib/api'
 import { validatePrice, validateQuantity } from '@/lib/validation'
 import { lowStockWhere } from '@/lib/low-stock'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
+import { productForRole } from '@/lib/sale-visibility'
 
 const BARCODE_DUPLICATE = { barcode: 'Barkodi ekziston tashmë' }
 
@@ -59,15 +60,10 @@ export async function GET(req: NextRequest) {
       orderBy: { emri: 'asc' },
     })
 
-    // Cashiers work the till and have no business seeing cost prices, which
-    // would let them derive the margin the receipt no longer shows them.
-    if (role === 'cashier') {
-      return NextResponse.json(
-        products.map(({ cmimiBlerjes: _cost, ...rest }) => rest)
-      )
-    }
-
-    return NextResponse.json(products)
+    // Cashiers work the till and have no business seeing cost prices
+    // (current or pending), which would let them derive the margin the
+    // receipt no longer shows them. Staff keep cost but not invoiced stock.
+    return NextResponse.json(products.map((p) => productForRole(p, role)))
   } catch (error) {
     return handleApiError(error, 'Products GET')
   }

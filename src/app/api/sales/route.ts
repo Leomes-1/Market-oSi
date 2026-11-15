@@ -4,7 +4,7 @@ import { requireRole } from '@/lib/auth-helpers'
 import { ApiFailure, badRequest, handleApiError } from '@/lib/api'
 import { tracksStock, validateQuantity, weightForAmount } from '@/lib/validation'
 import { applyConsumptionLocked, priceConsumption, takeAndLock } from '@/lib/pricing'
-import { stripProfitFromSales } from '@/lib/sale-visibility'
+import { stripProfitFromSale, stripProfitFromSales } from '@/lib/sale-visibility'
 import { scheduleSnapshot } from '@/lib/backups/snapshot'
 
 export async function GET(req: NextRequest) {
@@ -92,7 +92,7 @@ function mergeLines(items: IncomingItem[]): IncomingItem[] {
 }
 
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole(['admin', 'cashier'])
+  const { role, error } = await requireRole(['admin', 'cashier'])
   if (error) return error
 
   try {
@@ -255,7 +255,10 @@ export async function POST(req: NextRequest) {
     })
 
     scheduleSnapshot()
-    return NextResponse.json(sale, { status: 201 })
+    // Same rule as GET: a cashier gets no profit, no cost and no invoiced
+    // split, and each line's product only as far as the POS needs it to
+    // update its cached catalogue (stock and sale prices).
+    return NextResponse.json(stripProfitFromSale(sale, role), { status: 201 })
   } catch (error) {
     return handleApiError(error, 'Sales POST')
   }

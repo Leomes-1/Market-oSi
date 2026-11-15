@@ -216,7 +216,14 @@ export async function POST(req: NextRequest) {
     })
 
     scheduleSnapshot()
-    return NextResponse.json(entry, { status: 201 })
+    // Cashiers see personal-use cost by design, but not the invoiced split
+    // (Inventari is admin-only), same as GET.
+    return NextResponse.json(
+      role === 'admin'
+        ? entry
+        : { ...entry, items: entry.items.map(({ sasiaFaturuar: _f, ...item }) => item) },
+      { status: 201 }
+    )
   } catch (err) {
     return handleApiError(err, `PersonalUse POST (role ${role})`)
   }
