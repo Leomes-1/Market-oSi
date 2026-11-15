@@ -13,8 +13,6 @@ export interface SupplyLine {
   sasiaAktuale: number
   /** Reorder point, shown only where there is one (reorder suggestions). */
   stokuMinimal?: number
-  /** Suggested quantity, shown as a hint next to the input. */
-  sasiaSugjeruar?: number
   sasia: number
   cmimiBlerjes: number
   /** Sale price for this product, editable alongside the purchase price. */
@@ -31,8 +29,6 @@ interface SupplyLineTableProps {
   onChangeSalePrice: (productId: number, cmimiShitjes: number) => void
   onToggleUpdatePrice?: (productId: number) => void
   onRemove?: (productId: number) => void
-  /** Shows the "current stock" and "suggested" columns. */
-  showSuggestion?: boolean
   emptyMessage?: string
 }
 
@@ -55,7 +51,6 @@ export default function SupplyLineTable({
   onChangeSalePrice,
   onToggleUpdatePrice,
   onRemove,
-  showSuggestion = false,
   emptyMessage = 'Asnjë produkt',
 }: SupplyLineTableProps) {
   const qtyRefs = useRef<Map<number, HTMLInputElement>>(new Map())
@@ -103,9 +98,6 @@ export default function SupplyLineTable({
           <tr>
             <th className="table-th">Produkti</th>
             <th className="table-th text-center whitespace-nowrap">Stoku</th>
-            {showSuggestion && (
-              <th className="table-th text-center whitespace-nowrap">Sugjeruar</th>
-            )}
             <th className="table-th text-center w-28">Sasia</th>
             <th className="table-th text-right w-32">Çm. Blerjes</th>
             <th className="table-th text-right w-32">Çm. Shitjes</th>
@@ -138,12 +130,6 @@ export default function SupplyLineTable({
                     <span className="text-slate-300">—</span>
                   )}
                 </td>
-
-                {showSuggestion && (
-                  <td className="table-td text-center text-slate-500 tabular-nums">
-                    {line.sasiaSugjeruar ?? '—'}
-                  </td>
-                )}
 
                 <td className="table-td">
                   <input

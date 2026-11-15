@@ -39,7 +39,6 @@ export async function GET() {
       njesia: string
       cmimiBlerjes: number
       cmimiShitjes: number
-      sasiaSugjeruar: number
     }
 
     type Group = {
@@ -59,7 +58,6 @@ export async function GET() {
           products: [],
         })
       }
-      const sasiaSugjeruar = Math.max(p.stokuMinimal * 2 - p.sasia, p.stokuMinimal)
       groupMap.get(key)!.products.push({
         id: p.id,
         emri: p.emri,
@@ -69,7 +67,6 @@ export async function GET() {
         njesia: p.njesia,
         cmimiBlerjes: p.cmimiBlerjes,
         cmimiShitjes: p.cmimiShitjes,
-        sasiaSugjeruar,
       })
     }
 

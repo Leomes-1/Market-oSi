@@ -133,11 +133,36 @@ const ADDED_COLUMNS: Array<{
 ]
 
 /**
+ * Tables added by migrations after snapshots already existed. A snapshot that
+ * predates one has no entry for it at all; it restores with the table empty.
+ * Only for tables whose rows nothing else depends on — an empty table must be
+ * a correct state for the rest of the snapshot. Any other missing table still
+ * blocks the restore.
+ */
+const ADDED_TABLES: string[] = [
+  // 9_lista_blerjeve — before it there was no shopping list: empty list.
+  'ShoppingListItem',
+]
+
+/**
  * Brings a snapshot taken before an additive migration up to the live shape,
- * in place: declares the new column and gives every row its value. Snapshots
- * written after the migration already carry it and are left alone.
+ * in place: declares a new table as empty, declares a new column and gives
+ * every row its value. Snapshots written after the migration already carry
+ * them and are left alone.
  */
 function upgradeSnapshot(snapshot: SnapshotFile, live: Record<string, string[]>) {
+  for (const table of ADDED_TABLES) {
+    if (!live[table]) continue
+    if (!snapshot.columns || typeof snapshot.columns !== 'object') continue
+    if (!snapshot.tables || typeof snapshot.tables !== 'object') continue
+    if (!snapshot.rowCounts || typeof snapshot.rowCounts !== 'object') continue
+    // Absent from all three, or the file was edited: then `plan` decides.
+    if (table in snapshot.columns || table in snapshot.tables || table in snapshot.rowCounts) continue
+    snapshot.columns[table] = [...live[table]]
+    snapshot.tables[table] = []
+    snapshot.rowCounts[table] = 0
+  }
+
   for (const { table, column, type, value } of ADDED_COLUMNS) {
     const signature = `${column}:${type}`
     const declared: unknown = snapshot.columns?.[table]

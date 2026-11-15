@@ -30,6 +30,12 @@ interface BarcodeFieldProps {
   products: CatalogProduct[]
   /** Exact barcode match against the cache (no network). */
   findByBarcode: (code: string) => CatalogProduct | undefined
+  /**
+   * Focus on mount. The POS wants 'always' (the default); a page also used on
+   * a phone passes true, focusing on desktop only so the keyboard doesn't pop.
+   */
+  autoFocus?: boolean | 'always'
+  placeholder?: string
 }
 
 /**
@@ -62,7 +68,15 @@ const QUERY_PAUSE_MS = 200
  */
 const BarcodeField = memo(
   forwardRef<BarcodeFieldHandle, BarcodeFieldProps>(function BarcodeField(
-    { onScan, onPick, onQuery, products, findByBarcode },
+    {
+      onScan,
+      onPick,
+      onQuery,
+      products,
+      findByBarcode,
+      autoFocus = 'always',
+      placeholder = 'Skano barkodin ose kërko produktin...',
+    },
     ref
   ) {
     const [value, setValue] = useState('')
@@ -145,9 +159,9 @@ const BarcodeField = memo(
           onChange={setValue}
           onSubmit={submit}
           tone={tone ?? 'neutral'}
-          autoFocus="always"
-          placeholder="Skano barkodin ose kërko produktin..."
-          aria-label="Skano barkodin ose kërko produktin"
+          autoFocus={autoFocus}
+          placeholder={placeholder}
+          aria-label={placeholder}
           inputClassName="py-2.5 text-sm font-medium rounded-xl border-2"
           icon={
             tone === 'success' ? (

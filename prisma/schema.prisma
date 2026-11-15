@@ -77,8 +77,39 @@ model Product {
   barcodes      ProductBarcode[]
   supplyItems   SupplyItem[]
   personalUses  PersonalUse[]
+  shoppingList  ShoppingListItem?
 
   @@index([furnitorId])
+}
+
+/// One line of the shared shopping list ("Lista e blerjeve" on Porositje të
+/// Sugjeruara). There is one list for the whole shop, so there is no header
+/// table: the list is simply every row here.
+///
+/// A catalogue line has `productId`; a free-text line (something not in the
+/// catalogue) has none and lives on `emri` alone. At most one line per
+/// product (unique index), so adding a product that is already listed adds
+/// to its quantity instead. Deleting the product turns its line into a
+/// free-text one (ON DELETE SET NULL) rather than losing it.
+///
+/// `cmimiBlerjes` is this list's own price, prefilled from the product when
+/// the line is added; editing it never touches Product. Migration
+/// 9_lista_blerjeve; snapshots taken before it restore with an empty list.
+model ShoppingListItem {
+  id           Int      @id @default(autoincrement())
+  productId    Int?     @unique
+  product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// Free-text name, or the product's name when the line was added.
+  emri         String
+  njesia       String   @default("cope")
+  /// CHECK "ShoppingListItem_sasia_non_negative" (>= 0).
+  sasia        Float    @default(1)
+  /// CHECK "ShoppingListItem_cmimiBlerjes_non_negative" (>= 0).
+  cmimiBlerjes Float    @default(0)
+  /// Ticked off at the market.
+  blere        Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
 }
 
 model Supply {

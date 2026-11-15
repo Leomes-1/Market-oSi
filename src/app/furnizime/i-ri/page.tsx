@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
@@ -8,6 +8,8 @@ import { useRole } from '@/contexts/RoleContext'
 import AccessDenied from '@/components/AccessDenied'
 import SearchInput from '@/components/ui/SearchInput'
 import SupplyLineTable, { type SupplyLine } from '@/components/ui/SupplyLineTable'
+import Modal from '@/components/ui/Modal'
+import type { ShoppingListLine } from '@/lib/shopping-list'
 import { useCatalog, type CatalogProduct } from '@/lib/catalog'
 import { formatCurrency } from '@/lib/utils'
 import { pendingLabel } from '@/lib/pricing'
@@ -17,9 +19,36 @@ import {
   RiSearchLine,
   RiCheckLine,
   RiLoader4Line,
+  RiShoppingCart2Line,
 } from 'react-icons/ri'
 
 const NO_SUPPLIER = '__pa_furnitor__'
+
+/** Opened from "Lista e blerjeve" (Porositje të Sugjeruara)? */
+function openedFromList(): boolean {
+  try {
+    return new URLSearchParams(window.location.search).get('lista') === '1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The shopping list as this page uses it. Only lines ticked ✓ (bought) count:
+ * their catalogue products prefill the supply, and after saving the ticked
+ * lines are what may be removed. Unticked lines stay for next time.
+ */
+interface FromList {
+  productIds: number[]
+  /** Every ticked line, free text included: what "remove the bought lines" removes. */
+  boughtLineIds: number[]
+  /** Ticked free-text lines: not in the catalogue, so not in a supply. */
+  skippedFree: string[]
+  /** Ticked catalogue lines left at quantity 0. */
+  skippedZero: number
+  /** Lines not ticked, left on the list. */
+  unticked: number
+}
 
 function getTodayString() {
   const d = new Date()
@@ -49,6 +78,51 @@ export default function FurnizimIRiPage() {
   const [meTvsh, setMeTvsh] = useState(false)
   const [nrFatures, setNrFatures] = useState('')
   const [saving, setSaving] = useState(false)
+  // Set when the page was opened from the shopping list and the list loaded.
+  const [fromList, setFromList] = useState<FromList | null>(null)
+  const [listLoading, setListLoading] = useState(false)
+  const autoChosen = useRef(false)
+  // After saving a supply made from the list: ask whether to remove the bought lines.
+  const [askClear, setAskClear] = useState(false)
+  const [clearingList, setClearingList] = useState(false)
+
+  // Prefill from the shopping list: its quantities and its own prices.
+  useEffect(() => {
+    if (!openedFromList()) return
+    let cancelled = false
+    setListLoading(true)
+    ;(async () => {
+      try {
+        const res = await fetch('/api/shopping-list')
+        if (!res.ok) throw new Error()
+        const items = ((await res.json()).items ?? []) as ShoppingListLine[]
+        if (cancelled) return
+        const bought = items.filter((l) => l.blere)
+        const usable = bought.filter((l) => l.productId !== null && l.sasia > 0)
+        const ids = usable.map((l) => l.productId as number)
+        setQty(Object.fromEntries(usable.map((l) => [l.productId, l.sasia])))
+        setPrice((prev) => ({
+          ...prev,
+          ...Object.fromEntries(usable.map((l) => [l.productId, l.cmimiBlerjes])),
+        }))
+        setExtraIds(ids)
+        setFromList({
+          productIds: ids,
+          boughtLineIds: bought.map((l) => l.id),
+          skippedFree: bought.filter((l) => l.productId === null).map((l) => l.emri),
+          skippedZero: bought.filter((l) => l.productId !== null && l.sasia <= 0).length,
+          unticked: items.length - bought.length,
+        })
+      } catch {
+        if (!cancelled) toast.error('Lista e blerjeve nuk u ngarkua')
+      } finally {
+        if (!cancelled) setListLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Suppliers are derived from the catalogue, so the page needs no extra fetch.
   const suppliers = useMemo(() => {
@@ -90,8 +164,21 @@ export default function FurnizimIRiPage() {
     const extras = extraIds
       .map((id) => products.find((p) => p.id === id))
       .filter((p): p is CatalogProduct => !!p && !own.some((o) => o.id === p.id))
+    if (fromList) {
+      // From the shopping list: its products first, in list order, then the
+      // rest of the supplier's catalogue.
+      const listedIds = new Set(fromList.productIds)
+      const listed = fromList.productIds
+        .map((id) => products.find((p) => p.id === id))
+        .filter((p): p is CatalogProduct => !!p)
+      return [
+        ...listed,
+        ...own.filter((p) => !listedIds.has(p.id)),
+        ...extras.filter((p) => !listedIds.has(p.id)),
+      ]
+    }
     return [...own, ...extras]
-  }, [products, supplierKey, extraIds])
+  }, [products, supplierKey, extraIds, fromList])
 
   // Seed the per-row purchase price from the product once the supplier is set.
   useEffect(() => {
@@ -169,10 +256,28 @@ export default function FurnizimIRiPage() {
   function chooseSupplier(key: string) {
     setSupplierKey(key)
     setProductSearch('')
-    setQty({})
-    setUpdatePrice({})
+    // From the list the quantities are the point: changing the supplier keeps them.
+    if (!fromList) {
+      setQty({})
+      setUpdatePrice({})
+    }
     setStep('lines')
   }
+
+  // Every listed product has the same supplier: pick it and go to the lines.
+  useEffect(() => {
+    if (!fromList || autoChosen.current || loading || fromList.productIds.length === 0) return
+    autoChosen.current = true
+    const keys = new Set(
+      fromList.productIds
+        .map((id) => products.find((p) => p.id === id))
+        .filter((p): p is CatalogProduct => !!p)
+        .map((p) => (p.furnitorId == null ? NO_SUPPLIER : String(p.furnitorId)))
+    )
+    if (keys.size === 1) chooseSupplier(Array.from(keys)[0])
+    // chooseSupplier only sets state; this runs once, when the list and catalogue are in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromList, loading, products])
 
   // A scanned barcode belonging to this supplier bumps that row by one.
   function handleScan(code: string) {
@@ -234,6 +339,10 @@ export default function FurnizimIRiPage() {
       }
       toast.success('Furnizimi u ruajt me sukses')
       await refresh()
+      if (fromList) {
+        setAskClear(true)
+        return
+      }
       router.push('/furnizime')
     } catch {
       toast.error('Gabim gjatë ruajtjes')
@@ -242,7 +351,58 @@ export default function FurnizimIRiPage() {
     }
   }
 
+  async function finishFromList(removeBought: boolean) {
+    if (removeBought && fromList && fromList.boughtLineIds.length > 0) {
+      setClearingList(true)
+      try {
+        // Only lines still ticked are removed; unticked ones stay for next time.
+        const res = await fetch(
+          `/api/shopping-list?bought=${fromList.boughtLineIds.join(',')}`,
+          { method: 'DELETE' }
+        )
+        if (!res.ok) throw new Error()
+        const body = await res.json().catch(() => ({}))
+        const n = typeof body.removed === 'number' ? body.removed : fromList.boughtLineIds.length
+        toast.success(n === 1 ? '1 rresht i blerë u hoq nga lista' : `${n} rreshta të blerë u hoqën nga lista`)
+      } catch {
+        toast.error('Rreshtat e blerë nuk u hoqën nga lista')
+      } finally {
+        setClearingList(false)
+      }
+    }
+    setAskClear(false)
+    router.push('/furnizime')
+  }
+
   if (!role || !['admin', 'staff'].includes(role)) return <AccessDenied />
+
+  const listBanner = (listLoading || fromList) && (
+    <div className="px-4 sm:px-6 lg:px-8 py-2.5 border-b border-blue-100 bg-blue-50 text-sm text-blue-800 flex-shrink-0">
+      <p className="flex items-center gap-2">
+        <RiShoppingCart2Line className="flex-shrink-0" />
+        {!fromList
+          ? 'Duke ngarkuar listën e blerjeve...'
+          : `Nga lista e blerjeve: ${fromList.productIds.length} produkte të blera (✓)${
+              step === 'supplier' ? ' — zgjidh furnitorin' : ''
+            }`}
+      </p>
+      {fromList && fromList.unticked > 0 && (
+        <p className="text-xs text-blue-700/80 mt-1 pl-6">
+          {fromList.unticked} {fromList.unticked === 1 ? 'rresht pa ✓ mbetet' : 'rreshta pa ✓ mbeten'} në listë
+        </p>
+      )}
+      {fromList && fromList.skippedFree.length > 0 && (
+        <p className="text-xs text-amber-700 mt-1 pl-6">
+          Nuk janë në katalog, prandaj nuk shtohen në furnizim: {fromList.skippedFree.join(', ')}
+        </p>
+      )}
+      {fromList && fromList.skippedZero > 0 && (
+        <p className="text-xs text-blue-700/80 mt-1 pl-6">
+          {fromList.skippedZero} produkte me sasi 0 u lanë jashtë
+        </p>
+      )}
+    </div>
+  )
 
   return (
     <div className="flex flex-col h-full">
@@ -264,6 +424,8 @@ export default function FurnizimIRiPage() {
             : `${chosen?.emri} · ${supplierProducts.length} produkte`}
         </p>
       </div>
+
+      {listBanner}
 
       {/* Step 1 — supplier picker */}
       {step === 'supplier' && (
@@ -425,7 +587,7 @@ export default function FurnizimIRiPage() {
                 </div>
                 <button
                   onClick={save}
-                  disabled={saving || entered.length === 0}
+                  disabled={saving || askClear || entered.length === 0}
                   className="btn-primary flex items-center gap-2 whitespace-nowrap"
                 >
                   {saving ? (
@@ -445,6 +607,39 @@ export default function FurnizimIRiPage() {
           </div>
         </>
       )}
+
+      <Modal
+        isOpen={askClear}
+        onClose={() => {
+          if (!clearingList) void finishFromList(false)
+        }}
+        title="Furnizimi u ruajt"
+        size="sm"
+      >
+        <p className="text-sm text-slate-600 mb-5">
+          Të hiqen nga lista e blerjeve rreshtat e blerë (✓)?
+          {fromList && fromList.unticked > 0 && ' Rreshtat pa ✓ mbeten për herën tjetër.'}
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => void finishFromList(false)}
+            disabled={clearingList}
+            className="btn-secondary"
+          >
+            Jo, mbaje
+          </button>
+          <button
+            type="button"
+            onClick={() => void finishFromList(true)}
+            disabled={clearingList}
+            className="btn-danger flex items-center gap-2"
+          >
+            {clearingList && <RiLoader4Line className="animate-spin" />}
+            Po, hiqi
+          </button>
+        </div>
+      </Modal>
     </div>
   )
 }
